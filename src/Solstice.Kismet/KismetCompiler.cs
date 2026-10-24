@@ -150,6 +150,14 @@ public static class KismetCompiler
                 case IntArg i:
                     return new EX_IntConst { Value = i.Value };
 
+                case BoolArg b:
+                    return b.Value ? new EX_True() : new EX_False();
+
+                case PointerArg p:
+                    return p.Instance
+                        ? new EX_InstanceVariable { Variable = p.Pointer }
+                        : new EX_LocalVariable { Variable = p.Pointer };
+
                 case LocalArg l when variables is not null && variables.TryGetValue(l.Name, out var pointer):
                     // 复用现有字节码里的属性指针：FFieldPath 自带变量名与归属索引
                     return new EX_LocalVariable { Variable = pointer };
@@ -326,7 +334,7 @@ public static class KismetCompiler
                     result.Add(new EX_LetBool
                     {
                         VariableExpression = new EX_LocalVariable { Variable = bp },
-                        AssignmentExpression = ab.Value ? new EX_True() : new EX_False()
+                        AssignmentExpression = ToExpr(ab.Value)
                     });
                     break;
 

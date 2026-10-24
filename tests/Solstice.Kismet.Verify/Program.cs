@@ -67,7 +67,7 @@ var options = new DecompileOptions(Measure, ResolveImport);
     var call = nodes[0] as CallNode;
     Check("参数: 个数", call?.Args.Count == 2, $"{call?.Args.Count}");
     Check("参数: 首参是常量 7", call?.Args[0] is IntArg { Value: 7 });
-    Check("参数: 次参 True→1", call?.Args[1] is IntArg { Value: 1 });
+    Check("参数: 次参是布尔真", call?.Args[1] is BoolArg { Value: true });
 }
 
 // ---- 3. if 结构 ----

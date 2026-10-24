@@ -1,3 +1,5 @@
+using UAssetAPI.Kismet.Bytecode;
+
 namespace Solstice.Kismet;
 
 /// <summary>插销类型。颜色由 UI 按此映射，类型推断也读它。</summary>
@@ -76,6 +78,15 @@ public sealed record IntArg(int Value) : KArg(PinType.Int);
 
 public sealed record LocalArg(string Name) : KArg(PinType.Int);
 
+/// <summary>
+/// 原样保留的属性指针。反编译时用它，避免多段 FFieldPath / ResolvedOwner 被压平成名字后丢失信息。
+/// </summary>
+public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool Instance = false)
+    : KArg(PinType.Object);
+
+/// <summary>布尔字面量，对应 EX_True / EX_False。</summary>
+public sealed record BoolArg(bool Value) : KArg(PinType.Bool);
+
 /// <summary>调用的形态（由签名与归属推断，不需要用户选）。</summary>
 public enum CallShape
 {
@@ -133,8 +144,8 @@ public sealed record VirtualCallNode(string Function, IReadOnlyList<KArg> Args)
     : KNode($"Virtual {Function}");
 
 /// <summary>布尔赋值：编译成 EX_LetBool（VariableExpression + AssignmentExpression）。</summary>
-public sealed record AssignBoolNode(string VariableName, bool Value)
-    : KNode($"Set {VariableName} = {(Value ? "true" : "false")}");
+public sealed record AssignBoolNode(string VariableName, KArg Value)
+    : KNode($"Set {VariableName}");
 
 /// <summary>
 /// 循环：条件为真时反复执行循环体。

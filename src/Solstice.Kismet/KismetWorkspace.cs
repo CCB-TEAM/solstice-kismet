@@ -279,7 +279,7 @@ public sealed class KismetWorkspace
                     break;
 
                 case "assign-bool":
-                    nodes.Add(new AssignBoolNode(n.GetProperty("var").GetString()!, n.GetProperty("value").GetBoolean()));
+                    nodes.Add(new AssignBoolNode(n.GetProperty("var").GetString()!, new BoolArg(n.GetProperty("value").GetBoolean())));
                     break;
 
                 case "call":

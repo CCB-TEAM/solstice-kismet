@@ -237,10 +237,10 @@ public static class KismetDecompiler
         EX_IntConst i => new IntArg(i.Value),
         EX_IntZero => new IntArg(0),
         EX_IntOne => new IntArg(1),
-        EX_True => new IntArg(1),
-        EX_False => new IntArg(0),
-        EX_LocalVariable lv => new LocalArg(TargetName(lv)),
-        EX_InstanceVariable iv => new LocalArg(TargetName(iv)),
+        EX_True => new BoolArg(true),
+        EX_False => new BoolArg(false),
+        EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
+        EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
         EX_FinalFunction f => new CallArg(
             options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>",
             ToArgs(f.Parameters, options),
@@ -280,7 +280,8 @@ public static class KismetDecompiler
     private static KNode ToBoolAssign(EX_LetBool letBool, DecompileOptions options)
     {
         var target = TargetName(letBool.VariableExpression);
-        var value = letBool.AssignmentExpression is EX_True or EX_IntOne;
+        // 赋值源可能是字面量，也可能是一次读变量/调用，必须原样保留
+        var value = ToArg(letBool.AssignmentExpression, options) ?? new BoolArg(false);
         return new AssignBoolNode(target, value);
     }
 
