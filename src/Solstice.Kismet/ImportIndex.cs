@@ -57,12 +57,89 @@ public static class ImportIndex
     /// 没给时退化为沿用模板的 Outer（只适用于与模板同类的函数）。
     /// </para>
     /// </summary>
+    /// <summary>
+    /// 按 <c>(函数名, 归属类全路径)</c> 建索引。归属类由导入链推出：
+    /// Function 的 outer 是 Class，Class 的 outer 是 Package。
+    /// </summary>
+    public static Dictionary<(string Name, string Owner), FPackageIndex> BuildFunctionIndexByOwner(UAsset asset)
+    {
+        var index = new Dictionary<(string, string), FPackageIndex>();
+
+        for (var i = 0; i < asset.Imports.Count; i++)
+        {
+            var entry = asset.Imports[i];
+            if (entry.ClassName?.ToString() != "Function")
+            {
+                continue;
+            }
+
+            var name = entry.ObjectName?.ToString();
+            if (string.IsNullOrEmpty(name) || name == "Default__Function")
+            {
+                continue;
+            }
+
+            index.TryAdd((name, OwnerPathOf(asset, entry.OuterIndex)), new FPackageIndex(-(i + 1)));
+        }
+
+        return index;
+    }
+
+    private static string OwnerPathOf(UAsset asset, FPackageIndex? index)
+    {
+        var raw = index?.Index ?? 0;
+        if (raw >= 0)
+        {
+            return raw == 0 || raw > asset.Exports.Count
+                ? ""
+                : asset.Exports[raw - 1].ObjectName?.ToString() ?? "";
+        }
+
+        var cursor = -raw - 1;
+        if (cursor < 0 || cursor >= asset.Imports.Count)
+        {
+            return "";
+        }
+
+        var classImport = asset.Imports[cursor];
+        var className = classImport.ObjectName?.ToString() ?? "";
+        var outer = classImport.OuterIndex?.Index ?? 0;
+
+        if (outer < 0 && -outer - 1 < asset.Imports.Count)
+        {
+            var package = asset.Imports[-outer - 1].ObjectName?.ToString() ?? "";
+            return $"{package}.{className}";
+        }
+
+        return className;
+    }
+
+    /// <summary>
+    /// 保证函数在 Import 表里有条目，返回它的 FPackageIndex。
+    ///
+    /// <para>
+    /// 给了 <paramref name="ownerClassPath"/>（形如 <c>/Script/Engine.Actor</c>）时，
+    /// 按 <c>(名字, 归属)</c> 精确匹配——同名函数可能挂在不同类下，
+    /// 只按名字查会取到别人的那一个，新调用就指向了错误的函数。
+    /// 找不到时才补齐 包 → 类 两级导入并新建。
+    /// </para>
+    /// </summary>
     public static FPackageIndex EnsureFunction(UAsset asset, string functionName, string? ownerClassPath = null)
     {
-        var existing = BuildFunctionIndex(asset);
-        if (existing.TryGetValue(functionName, out var found))
+        if (!string.IsNullOrWhiteSpace(ownerClassPath))
         {
-            return found;
+            if (BuildFunctionIndexByOwner(asset).TryGetValue((functionName, ownerClassPath), out var exact))
+            {
+                return exact;
+            }
+        }
+        else
+        {
+            var existing = BuildFunctionIndex(asset);
+            if (existing.TryGetValue(functionName, out var found))
+            {
+                return found;
+            }
         }
 
         var funcTemplate = FindTemplate(asset, "Function", "Default__Function")

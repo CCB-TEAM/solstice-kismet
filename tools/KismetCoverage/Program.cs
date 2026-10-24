@@ -68,6 +68,11 @@ if (importProbe is not null)
     return RunImports(files, usmapPath, importProbe, catalogPath);
 }
 
+if (args.Contains("--collisions"))
+{
+    return RunCollisions(files, usmapPath, catalogPath);
+}
+
 if (useWorkspace)
 {
     return RunWorkspace(files, usmapPath);
@@ -357,6 +362,98 @@ static int RunPlan(string[] files, string usmapPath, string function, string? ca
 
     Directory.Delete(workDir, true);
     return plan.Pins.Count > 0 ? 0 : 1;
+}
+
+// 重名风险体检：Import 表里同名函数挂在不同类下时，「按名字查」会取到哪一个？
+// 同时用 jmap 的 OwnerPath 核对：按名字取到的是不是正确的那一个。
+static int RunCollisions(string[] files, string usmapPath, string? catalogPath)
+{
+    var catalog = catalogPath is not null && File.Exists(catalogPath)
+        ? FunctionCatalog.Load(File.ReadAllText(catalogPath))
+        : null;
+
+    var usmapBytes = File.ReadAllBytes(usmapPath);
+    var ambiguousNames = new Dictionary<string, int>(StringComparer.Ordinal);
+    var wrongPicks = new List<string>();
+    var assetsWithDuplicates = 0;
+    var totalFunctions = 0;
+
+    foreach (var file in files)
+    {
+        var uexp = Path.ChangeExtension(file, ".uexp");
+        if (!File.Exists(uexp))
+        {
+            continue;
+        }
+
+        var name = Path.GetFileNameWithoutExtension(file);
+        var ws = KismetWorkspace.Open(File.ReadAllBytes(file), File.ReadAllBytes(uexp), usmapBytes,
+            Path.Combine(Path.GetTempPath(), "kismet-coll-" + Guid.NewGuid().ToString("N")[..8]));
+
+        var index = ws.FunctionImportOwners();   // (名字, owner 全路径) -> 导入
+        var byName = index.GroupBy(kv => kv.Key.Name, StringComparer.Ordinal)
+            .Where(g => g.Select(x => x.Key.Owner).Distinct(StringComparer.Ordinal).Count() > 1)
+            .ToArray();
+
+        if (byName.Length > 0)
+        {
+            assetsWithDuplicates++;
+            foreach (var g in byName)
+            {
+                ambiguousNames[g.Key] = ambiguousNames.TryGetValue(g.Key, out var c) ? c + 1 : 1;
+                var owners = g.Select(x => x.Key.Owner).Distinct(StringComparer.Ordinal);
+                Console.WriteLine($"  [重名] {name} :: {g.Key}");
+                foreach (var owner in owners)
+                {
+                    Console.WriteLine($"        owner={owner}");
+                }
+            }
+        }
+
+        if (catalog is not null)
+        {
+            foreach (var kv in index)
+            {
+                totalFunctions++;
+                var expected = catalog.Find(null, kv.Key.Name)?.OwnerPath;
+                if (string.IsNullOrEmpty(expected))
+                {
+                    continue;
+                }
+
+                // 名字查表会取第一条；如果它的 owner 与 jmap 给的不一致，就是取错
+                var firstOwner = index.Where(x => x.Key.Name == kv.Key.Name)
+                    .Select(x => x.Key.Owner)
+                    .FirstOrDefault();
+                if (firstOwner is not null
+                    && !string.Equals(firstOwner, expected, StringComparison.Ordinal)
+                    && string.Equals(kv.Key.Owner, expected, StringComparison.Ordinal))
+                {
+                    wrongPicks.Add($"{name} :: {kv.Key.Name} 首条 owner={firstOwner}，jmap 是 {expected}");
+                }
+            }
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"扫描资产 {files.Length}，其中 {assetsWithDuplicates} 个资产存在同名不同类的函数导入");
+    Console.WriteLine($"涉及的重名函数: {ambiguousNames.Count} 个");
+    foreach (var kv in ambiguousNames.OrderByDescending(k => k.Value).Take(10))
+    {
+        Console.WriteLine($"  {kv.Value,4} 个资产有重名  {kv.Key}");
+    }
+
+    if (catalog is not null)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"按名字查表会取错的情况: {wrongPicks.Count}");
+        foreach (var w in wrongPicks.Take(10))
+        {
+            Console.WriteLine("  " + w);
+        }
+    }
+
+    return 0;
 }
 
 // 打印「新建调用会补出哪些 Import」：函数条目本身 + 它的 outer 链。

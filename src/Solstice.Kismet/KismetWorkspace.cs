@@ -76,6 +76,11 @@ public sealed class KismetWorkspace
 
     public void AttachCatalog(FunctionCatalog catalog) => Catalog = catalog;
 
+    /// <summary>对象表（可选，由 jmap 的 objects.json 载入），用于核对归属类。</summary>
+    public ObjectCatalog? Objects { get; private set; }
+
+    public void AttachObjects(ObjectCatalog objects) => Objects = objects;
+
     /// <summary>
     /// 把函数导入解析成 owner 完整路径，例如 <c>/Script/Engine.KismetSystemLibrary</c>。
     /// 链：Function → Class → Package。
@@ -143,6 +148,15 @@ public sealed class KismetWorkspace
                             $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）——不猜调用形态");
 
         args ??= DefaultArgs(functionName).Select(a => a.Value).ToArray();
+
+        // 对象表在的话核对一下：jmap 给的归属必须真的是个类，否则补出来的导入会挂错地方
+        if (Objects is not null
+            && Objects.Find(signature.OwnerPath) is { } owner
+            && !string.Equals(owner.Type, "Class", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{signature.OwnerPath} 在对象表里是 {owner.Type}，不是类——拒绝按它补导入");
+        }
 
         var index = ImportIndex.EnsureFunction(_asset, functionName, signature.OwnerPath);
 
@@ -263,6 +277,76 @@ public sealed class KismetWorkspace
         }
 
         return new CallPlan(functionName, signature.OwnerPath, signature.Flags, shape, pins);
+    }
+
+    /// <summary>函数导入的身份：名字 + 归属类全路径。同名函数挂在不同类下必须区分开。</summary>
+    public readonly record struct FunctionKey(string Name, string Owner);
+
+    /// <summary>
+    /// Import 表里的函数导入，按 <c>(名字, 归属类)</c> 索引。
+    ///
+    /// <para>
+    /// 归属类由导入链推出：Function 的 outer 是 Class，Class 的 outer 是 Package，
+    /// 拼成 <c>/Script/Engine.KismetMathLibrary</c> 这种全路径。
+    /// </para>
+    /// </summary>
+    public IReadOnlyDictionary<FunctionKey, FPackageIndex> FunctionImportOwners()
+    {
+        var map = new Dictionary<FunctionKey, FPackageIndex>();
+
+        for (var i = 0; i < _asset.Imports.Count; i++)
+        {
+            var entry = _asset.Imports[i];
+            if (entry.ClassName?.ToString() != "Function")
+            {
+                continue;
+            }
+
+            var name = entry.ObjectName?.ToString();
+            if (string.IsNullOrEmpty(name))
+            {
+                continue;
+            }
+
+            map.TryAdd(new FunctionKey(name, OwnerPathOf(entry.OuterIndex)), new FPackageIndex(-(i + 1)));
+        }
+
+        return map;
+    }
+
+    /// <summary>由导入链拼出归属类的全路径（如 <c>/Script/Engine.KismetMathLibrary</c>）。</summary>
+    public string OwnerPathOf(FPackageIndex? index)
+    {
+        var raw = index?.Index ?? 0;
+        if (raw == 0)
+        {
+            return "";
+        }
+
+        if (raw > 0)
+        {
+            return raw <= _asset.Exports.Count
+                ? _asset.Exports[raw - 1].ObjectName?.ToString() ?? ""
+                : "";
+        }
+
+        var cursor = -raw - 1;
+        if (cursor < 0 || cursor >= _asset.Imports.Count)
+        {
+            return "";
+        }
+
+        var classImport = _asset.Imports[cursor];
+        var className = classImport.ObjectName?.ToString() ?? "";
+        var outer = classImport.OuterIndex?.Index ?? 0;
+
+        if (outer < 0 && -outer - 1 < _asset.Imports.Count)
+        {
+            var package = _asset.Imports[-outer - 1].ObjectName?.ToString() ?? "";
+            return $"{package}.{className}";
+        }
+
+        return className;
     }
 
     /// <summary>当前 Import 表条目数（新增导入前后对比用）。</summary>
