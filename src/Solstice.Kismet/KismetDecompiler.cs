@@ -63,7 +63,7 @@ public static class KismetDecompiler
                 case EX_Let let:
                     nodes.Add(new AssignNode(
                         TargetName(let.Variable),
-                        ToArg(let.Expression, options) ?? new IntArg(0),
+                        RequireArg(let.Expression, options),
                         PointerOf(let.Variable),
                         ToArg(let.Variable, options),
                         let.Value));
@@ -93,7 +93,7 @@ public static class KismetDecompiler
                 case EX_LetValueOnPersistentFrame persistent:
                     nodes.Add(new PersistentAssignNode(
                         persistent.DestinationProperty!,
-                        ToArg(persistent.AssignmentExpression, options) ?? new IntArg(0),
+                        RequireArg(persistent.AssignmentExpression, options),
                         PropName(persistent.DestinationProperty)));
                     i++;
                     continue;
@@ -592,6 +592,14 @@ public static class KismetDecompiler
                 return null;
         }
     }
+
+    /// <summary>
+    /// 必须有值的参数转换。不认识的表达式直接抛异常——
+    /// 静默兜底成 IntConst 会让整条表达式退化，而且看不出是哪一步丢的。
+    /// </summary>
+    private static KArg RequireArg(KismetExpression? e, DecompileOptions options)
+        => ToArg(e, options)
+           ?? throw new InvalidOperationException($"表达式 {e?.Inst ?? "null"} 暂不支持");
 
     /// <summary>把变量表达式还原成指针参数，供回编译原样使用。</summary>
     private static PointerArg? PointerOf(KismetExpression? e) => e switch
