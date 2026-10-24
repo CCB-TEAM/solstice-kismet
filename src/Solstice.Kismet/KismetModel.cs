@@ -423,8 +423,13 @@ public sealed record UberSectionNode(
     IReadOnlyList<KNode> Nodes,
     UberTerminator Terminator,
     int? TargetOrdinal = null,
-    KArg? Condition = null)
-    : KNode($"Section @{StartOffset} {Terminator}{(TargetOrdinal is { } t ? $" -> #{t}" : "")}");
+    KArg? Condition = null,
+    string? Label = null)
+    : KNode(
+        "Section @" + StartOffset +
+        (Label is { Length: > 0 } ? " " + Label : "") +
+        " " + Terminator +
+        (TargetOrdinal is { } t ? $" -> #{t}" : ""));
 
 /// <summary>
 /// 整个 ubergraph：调度头 + 各入口段 + 尾声。

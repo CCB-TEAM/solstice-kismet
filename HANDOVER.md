@@ -16,7 +16,7 @@
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **46/46** |
+| 自检 `tests/Solstice.Kismet.Verify` | **49/49** |
 | 真实资产往返一致（`Blueprints/Logic` 全部 28 个资产） | **1305 / 1305 (100%)** |
 | 结构还原退化（6 资产口径 131 函数） | **3 个函数**（原 47 个） |
 | CI | 绿 |
@@ -55,7 +55,7 @@ src/Solstice.Kismet/
   UberGraph.cs         ubergraph 结构分析：调度头 / 尾声 / 基本块 / 终止符
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
-tests/Solstice.Kismet.Verify/  46 项自检
+tests/Solstice.Kismet.Verify/  49 项自检
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 ```
@@ -166,7 +166,13 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 `BPC_ChallengeAndRematch.ParseNotification`。它们字节完全一致，只是嵌套结构还还原不出来。
 
 12 个 `ExecuteUbergraph_*` 已经全部**展开**成「调度头 + 入口段 + 尾声」
-（`UberGraphNode`），不再进入退化流程，细节见 [docs/ubergraph.md](docs/ubergraph.md)。
+（`UberGraphNode`），不再进入退化流程，细节见 [docs/ubergraph.md](docs/ubergraph.md)：
+
+- 段名从段首的 `CallMulticastDelegate` 还原，**667 段全部命名**（`BP_Chat` 四段就是
+  `OnChatMinimized` / `OnChatCreated` / `OnChatClosed` + `UpdateMessageNotifications`）
+- `KismetCompiler.BakeUbergraph` 重新烘焙并**返回入口偏移表**，
+  12/12 与原表逐项相等——这张表就是要写回 `UClass` 事件引用的东西
+
 下一步对普通函数该做的是按跳转目标建基本块图，而不是继续加节点类型。
 
 ## 七、工具用法
@@ -220,7 +226,7 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 46/46
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 49/49
 
 .\tools\coverage.ps1 `
   -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
@@ -228,7 +234,7 @@ dotnet run --project tests\Solstice.Kismet.Verify     # 必须 46/46
 # 必须 1305 / 1305
 ```
 
-**提交前必须两项都绿**：自检 46/46 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 49/49 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git

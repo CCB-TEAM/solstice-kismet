@@ -60,10 +60,19 @@ var bytecode = target.ScriptBytecode!;
 Console.WriteLine($"[probe] {target.ObjectName}  共 {bytecode.Length} 条表达式");
 
 // ---- 1. 字节码结构 ----
+// 包索引两个方向都要能解析：
+//   负数 = Import（外部函数/类），正数 = 本包 Export。
+// ubergraph 段首的 CallMulticastDelegate 常常指向本类的**事件属性 Export**，
+// 只解析 Import 的话会显示成 <17>，段就没法命名。
 var importNames = new Dictionary<int, string>();
 for (var i = 0; i < asset.Imports.Count; i++)
 {
     importNames[-(i + 1)] = asset.Imports[i].ObjectName?.ToString() ?? "";
+}
+
+for (var i = 0; i < asset.Exports.Count; i++)
+{
+    importNames[i + 1] = asset.Exports[i].ObjectName?.ToString() ?? "";
 }
 
 Console.WriteLine();
@@ -146,7 +155,8 @@ if (uber is not null)
     Console.WriteLine($"  入口段      : {uber.Sections.Count} 个");
     foreach (var s in uber.Sections)
     {
-        Console.WriteLine($"    #{s.Ordinal,-3} [{s.StartIndex,4}..] off={s.StartOffset,-6} 节点={s.Nodes.Count,-3} 结束={s.Terminator}" +
+        var label = string.IsNullOrEmpty(s.Label) ? "" : $" {s.Label}";
+        Console.WriteLine($"    #{s.Ordinal,-3} [{s.StartIndex,4}..] off={s.StartOffset,-6} 节点={s.Nodes.Count,-3}{label} 结束={s.Terminator}" +
                           (s.BranchTarget is { } t ? $" -> {t}" : ""));
     }
 
@@ -179,6 +189,28 @@ var regenerated = KismetCompiler.CompileToExpressions(
     nodes, variables, funcs,
     e => e.GetSize(asset),
     n => new FName(asset, n));
+
+// ubergraph：重新烘焙后必须给出新的入口偏移表（调用方要写回 UClass）
+if (uber is not null)
+{
+    var baked = KismetCompiler.BakeUbergraph(
+        nodes, new CompileContext(variables, funcs, e => e.GetSize(asset), n => new FName(asset, n)));
+
+    if (baked is not null)
+    {
+        var sameEntries = baked.EntryOffsets.Count == uber.Sections.Count
+                          && baked.EntryOffsets.Zip(uber.Sections, (now, was) => now == was.StartOffset).All(x => x);
+
+        Console.WriteLine($"  入口偏移表: {(sameEntries ? "与原表一致" : "已变化")}  尾声 off={baked.EpilogueOffset}");
+        if (!sameEntries)
+        {
+            for (var i = 0; i < Math.Min(baked.EntryOffsets.Count, uber.Sections.Count); i++)
+            {
+                Console.WriteLine($"    段 #{i,-3} {uber.Sections[i].StartOffset} -> {baked.EntryOffsets[i]}");
+            }
+        }
+    }
+}
 
 Console.WriteLine();
 Console.WriteLine($"=== 回编译：{regenerated.Count} 条（原始 {bytecode.Length} 条）===");
@@ -323,7 +355,8 @@ static string Describe(KNode node, int depth)
         case UberSectionNode section:
         {
             var tail = section.TargetOrdinal is { } t ? $" -> #{t}" : "";
-            var head = $"{pad}Section @{section.StartOffset} {section.Terminator}{tail}";
+            var label = string.IsNullOrEmpty(section.Label) ? "" : " " + section.Label;
+            var head = $"{pad}Section @{section.StartOffset}{label} {section.Terminator}{tail}";
             if (section.Nodes.Count == 0)
             {
                 return head;

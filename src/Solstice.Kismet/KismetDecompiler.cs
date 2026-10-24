@@ -271,7 +271,8 @@ public static class KismetDecompiler
                 section.Nodes,
                 section.Terminator,
                 targetOrdinal,
-                section.TerminatorCondition));
+                section.TerminatorCondition,
+                section.Label));
         }
 
         var nodes = new List<KNode>

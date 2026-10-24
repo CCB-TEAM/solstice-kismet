@@ -311,6 +311,14 @@ var options = new DecompileOptions(Measure, ResolveImport);
         $"{((rebuilt[5] as EX_Jump)?.CodeOffset)}");
     Check("ubergraph 烘焙: Push 指向尾声", rebuilt[0] is EX_PushExecutionFlow { PushingAddress: 31 },
         $"{((rebuilt[0] as EX_PushExecutionFlow)?.PushingAddress)}");
+
+    // 重新烘焙要给出新的入口偏移表（调用方按同样顺序写回 UClass）
+    var baked = KismetCompiler.BakeUbergraph(nodes, new CompileContext(Measure: UberMeasure2));
+    Check("ubergraph 烘焙: 入口表条数", baked?.EntryOffsets.Count == 2, $"{baked?.EntryOffsets.Count}");
+    Check("ubergraph 烘焙: 入口表与原表一致",
+        baked is not null && baked.EntryOffsets.SequenceEqual([11u, 21u]),
+        baked is null ? "null" : string.Join(",", baked.EntryOffsets));
+    Check("ubergraph 烘焙: 尾声偏移", baked?.EpilogueOffset == 31, $"{baked?.EpilogueOffset}");
 }
 
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");

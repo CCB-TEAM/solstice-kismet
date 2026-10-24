@@ -57,16 +57,28 @@ var uber = UberGraph.Analyze(bytecode, options);
 ```
 
 `Decompile` 在函数开头（`baseOffset == 0`、未强制扁平）先尝试 ubergraph 形状，
-命中就直接产出：
+命中就直接产出（段名是从段首调用猜出来的）：
 
 ```
-UberGraph (4 段)
-  Section @10 JumpToEpilogue -> ...
-  Section @83 JumpToEpilogue -> ...
-  Section @648 JumpToOtherSection -> #...
-  Section @1267 FallsThrough
+UberGraph dispatch=EntryPoint push  4 段
+  Section @10 OnChatMinimized__DelegateSignature JumpToEpilogue
+  Section @83 OnChatCreated__DelegateSignature JumpToEpilogue
+  Section @648 OnChatClosed__DelegateSignature JumpToOtherSection -> #1
+  Section @1267 UpdateMessageNotifications FallsThrough
 Return
 ```
+
+### 段命名
+
+段首通常就是一次 `CallMulticastDelegate`，它的目标（`StackNode`）就是**本类的事件属性**，
+所以名字基本就是事件名。两个前提：
+
+- 包索引要**两个方向都能解析**：负数 = Import，正数 = 本包 Export。
+  只解析 Import 的话事件属性会显示成 `<17>`，段就没法命名（探针曾漏了这个）。
+- 猜不出来就不编：段首是普通赋值/调用时，只退化成 `Section @offset`。
+
+实测 12/12 ubergraph 的 100% 段都拿到了名字（共 667 段），
+`BP_Chat` 的四段直接是 `OnChatMinimized/OnChatCreated/OnChatClosed` 加 `UpdateMessageNotifications`。
 
 划分规则：**leader = 调度头之后第一条 ∪ 所有跳转目标**。
 不要用「遇到终止符就切」——段尾连续两条 `Jump` 会切出 0 节点的假入口
@@ -110,6 +122,18 @@ public sealed record UberGraphFlags(
 按 `Entries` 顺序烘段时偏移会变，必须把新的入口偏移写回 `UClass` 的事件引用，
 否则运行时 `ComputedJump` 会跳到错误位置。段内容与顺序不变时，结果应与原始字节完全相同。
 
+实际的 API 是 `KismetCompiler.BakeUbergraph`——它直接**返回**需要写回的那张表：
+
+```csharp
+var baked = KismetCompiler.BakeUbergraph(nodes, context);
+// baked.Expressions    重新烘焙出的表达式
+// baked.EntryOffsets   段顺序的入口偏移（写回 UClass 的就是这个）
+// baked.EpilogueOffset 尾声偏移
+```
+
+验证：12/12 ubergraph 在内容不变时，`EntryOffsets` 与原始段起始偏移**逐项相等**，
+且字节逐字节一致。这条由自检锁住（`ubergraph 烘焙: 入口表与原表一致`）。
+
 ## 五、控制流为什么难
 
 四类模式都不是树：
@@ -132,10 +156,14 @@ public sealed record UberGraphFlags(
 |---|---|---|
 | 1 | 只读分析：调度头 / 尾声 / 基本块 / 终止符 | **已完成** |
 | 2 | `UberGraphNode` 进模型 + 编译器按段重新烘焙 | **已完成**（12/12 逐字节一致） |
-| 3 | 段命名：从段首的 `CallMulticastDelegate` / 导入名猜事件名 | 待做 |
-| 4 | 把入口偏移回写 `KismetWorkspace`，暴露 `UberGraphFlags` | 待做 |
+| 3 | 段命名：从段首的 `CallMulticastDelegate` 还原事件名 | **已完成**（667 段全部命名） |
+| 4 | `BakeUbergraph` 返回入口偏移表，供写回 UClass | **已完成**（12/12 与原表一致） |
+| 5 | 真正按用户 Flag 改顺序/增删段 | 待做 |
 
-阶段 1–2 的验收结果：**全量 1305/1305 逐字节一致**保持，
+阶段 1–4 的验收结果：**全量 1305/1305 逐字节一致**保持，
 6 资产口径的结构退化从 7 个函数降到 **3 个**（12 个 ubergraph 全部展开）。
 剩下 3 个是普通函数里的共享尾部状态机：`setTimedOutAfterReconnect`、
 `TryToGoHome`、`ParseNotification`。
+
+阶段 5 才是「按用户意图重新烘」：现在能忠实重烘并给出新偏移表，但还不能改段顺序，
+因为入口表在外部、且改顺序会牵动 UClass 的事件引用——那一步需要与主项目联调。

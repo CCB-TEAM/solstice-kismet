@@ -31,7 +31,8 @@ public sealed record UberSection(
     IReadOnlyList<KNode> Nodes,
     UberTerminator Terminator,
     uint? BranchTarget,
-    KArg? TerminatorCondition = null);
+    KArg? TerminatorCondition = null,
+    string? Label = null);
 
 /// <summary>
 /// Ubergraph（<c>ExecuteUbergraph_*</c>）的结构分析。
@@ -246,6 +247,36 @@ public static class UberGraph
             body,
             terminator,
             target,
-            condition);
+            condition,
+            GuessLabel(body));
+    }
+
+    /// <summary>
+    /// 从段体猜这个名字段是哪个事件：段首通常就是一次多播委托调用
+    /// （`CallMulticastDelegate`），它的目标就是本类的事件属性。
+    /// 猜不出来就返回 null——不编造名字。
+    /// </summary>
+    private static string? GuessLabel(IReadOnlyList<KNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            var name = node switch
+            {
+                MulticastCallNode m => m.Function,
+                ContextCallNode c => $"{c.ObjectVariable}.{c.Function}",
+                VirtualCallNode v => v.Function,
+                LocalFinalCallNode l => l.Function,
+                MathCallNode m => m.Function,
+                CallNode c => c.Function,
+                _ => null
+            };
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+
+        return null;
     }
 }

@@ -130,12 +130,79 @@ public static class KismetCompiler
         CompileContext context)
         => CompileToExpressions(nodes, context.Variables, context.Functions, context.Measure, context.ResolveName);
 
+    /// <summary>重新烘焙 ubergraph 的结果：表达式 + 需要写回 UClass 的入口偏移表。</summary>
+    public sealed record UbergraphBakeResult(
+        IReadOnlyList<KismetExpression> Expressions,
+        IReadOnlyList<uint> EntryOffsets,
+        uint EpilogueOffset);
+
+    /// <summary>
+    /// 重新烘焙 ubergraph，并给出新的**入口偏移表**。
+    ///
+    /// <para>
+    /// 入口表（事件 → 字节偏移）不在字节码里，原表存在 UClass 的事件引用中。
+    /// 重新烘焙后偏移一般会变，返回的 <see cref="UbergraphBakeResult.EntryOffsets"/>
+    /// 必须按同样的顺序写回去，否则运行时 <c>ComputedJump</c> 会跳到错误位置。
+    /// </para>
+    ///
+    /// <para>段内容与顺序不变时，偏移表应与原始一致（这一点由自检锁住）。</para>
+    /// </summary>
+    public static UbergraphBakeResult? BakeUbergraph(IReadOnlyList<KNode> nodes, CompileContext context)
+    {
+        var uber = nodes.OfType<UberGraphNode>().FirstOrDefault();
+        if (uber is null || context.Measure is null)
+        {
+            return null;
+        }
+
+        var trace = new BakeTrace();
+        var expressions = CompileCore(
+            nodes, context.Variables, context.Functions, context.Measure, context.ResolveName, trace);
+
+        var offsets = new uint[expressions.Count + 1];
+        uint acc = 0;
+        for (var i = 0; i < expressions.Count; i++)
+        {
+            offsets[i] = acc;
+            acc += context.Measure(expressions[i]);
+        }
+
+        offsets[expressions.Count] = acc;
+
+        var entries = trace.SectionStarts
+            .Select(i => i < offsets.Length ? offsets[i] : acc)
+            .ToArray();
+
+        var epilogue = trace.EpilogueIndex >= 0 && trace.EpilogueIndex < offsets.Length
+            ? offsets[trace.EpilogueIndex]
+            : acc;
+
+        return new UbergraphBakeResult(expressions, entries, epilogue);
+    }
+
+    /// <summary>烘焙过程中收集的观察点（段起始下标、尾声下标）。</summary>
+    private sealed class BakeTrace
+    {
+        public List<int> SectionStarts { get; } = new();
+
+        public int EpilogueIndex { get; set; } = -1;
+    }
+
     public static IReadOnlyList<KismetExpression> CompileToExpressions(
         IReadOnlyList<KNode> nodes,
         IReadOnlyDictionary<string, KismetPropertyPointer>? variables = null,
         IReadOnlyDictionary<string, FPackageIndex>? functions = null,
         Func<KismetExpression, uint>? measure = null,
         Func<string, FName>? resolveName = null)
+        => CompileCore(nodes, variables, functions, measure, resolveName, null);
+
+    private static IReadOnlyList<KismetExpression> CompileCore(
+        IReadOnlyList<KNode> nodes,
+        IReadOnlyDictionary<string, KismetPropertyPointer>? variables,
+        IReadOnlyDictionary<string, FPackageIndex>? functions,
+        Func<KismetExpression, uint>? measure,
+        Func<string, FName>? resolveName,
+        BakeTrace? trace)
     {
         var result = new List<KismetExpression>();
 
@@ -686,6 +753,7 @@ public static class KismetCompiler
                     {
                         var section = uber.Sections[i];
                         sectionStart[i] = result.Count;
+                        trace?.SectionStarts.Add(result.Count);
 
                         foreach (var n in section.Nodes)
                         {
@@ -735,6 +803,10 @@ public static class KismetCompiler
 
                     // 尾声就在这一段之后（外层紧接着发声明的 Return）
                     var epilogueIndex = result.Count;
+                    if (trace is not null)
+                    {
+                        trace.EpilogueIndex = epilogueIndex;
+                    }
                     foreach (var jump in epilogueJumps)
                     {
                         patches.Add((jump, epilogueIndex));
