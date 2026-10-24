@@ -154,6 +154,11 @@ var nodes = KismetDecompiler.Decompile(
 
 所以：**反编译结果可以读、可以改、可以再生成**，但不保证与原始源码逐节点等价。
 
+## 字节码指令参考
+
+每条 Kismet 指令的 token、操作数、作用、出现场景、以及本库支持度，见
+**[docs/bytecode.md](docs/bytecode.md)**（含 100 个 token 全表和 6 资产 131 函数的实测频次）。
+
 ## 自检
 
 ```bash

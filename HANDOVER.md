@@ -49,6 +49,7 @@ src/Solstice.Kismet/
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
 tests/Solstice.Kismet.Verify/  19 项自检
+docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 ```
 
 ## 四、最关键的设计原则
@@ -130,6 +131,9 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 **已知局限**：`K2Node_SwitchName` 编译出的「8 连 `JumpIfNot` + 集中 case 体」无法还原成 switch 结构。这类函数靠 `DecompileVerified` 的自动退化保证字节正确，但可读性差。
 
 `EX_SwitchValue` 目前走 `RawArg` 原样保留，**没有做结构化还原**。
+
+> 每条指令的 token、操作数顺序、语义与出现场景，见 **[docs/bytecode.md](docs/bytecode.md)**。
+> 改反编译器/编译器之前先查这张表，尤其第十节「最容易混的几组」。
 
 **残留的结构还原 bug**：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 现在字节一致了，
 但结构化模式仍会打印 `[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，
