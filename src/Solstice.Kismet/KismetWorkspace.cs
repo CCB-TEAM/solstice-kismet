@@ -265,6 +265,50 @@ public sealed class KismetWorkspace
         return new CallPlan(functionName, signature.OwnerPath, signature.Flags, shape, pins);
     }
 
+    /// <summary>当前 Import 表条目数（新增导入前后对比用）。</summary>
+    public int ImportCount => _asset.Imports.Count;
+
+    /// <summary>
+    /// 打印某个函数导入及其 outer 链（调试/审计用）。
+    ///
+    /// <para>
+    /// 用来核对「新增的导入到底是克隆来的，还是按约定合成出来的」——
+    /// 合成条目的 <c>ClassPackage</c> 固定是 <c>/Script/CoreUObject</c>。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> DescribeImports(string functionName)
+    {
+        var lines = new List<string>();
+
+        for (var i = 0; i < _asset.Imports.Count; i++)
+        {
+            var entry = _asset.Imports[i];
+            if (entry.ObjectName?.ToString() != functionName)
+            {
+                continue;
+            }
+
+            var chain = new List<string>();
+            var cursor = i;
+            var guard = 0;
+
+            while (cursor >= 0 && cursor < _asset.Imports.Count && guard++ < 8)
+            {
+                var node = _asset.Imports[cursor];
+                chain.Add(
+                    $"{-(cursor + 1)}:{node.ClassName} '{node.ObjectName}' " +
+                    $"[clsPkg={node.ClassPackage} pkgName={node.PackageName} outer={node.OuterIndex?.Index}]");
+
+                var outer = node.OuterIndex?.Index ?? 0;
+                cursor = outer < 0 ? -outer - 1 : -1;
+            }
+
+            lines.Add($"导入 idx={-(i + 1)} 链: " + string.Join(" -> ", chain));
+        }
+
+        return lines;
+    }
+
     /// <summary>自动生成的参数：值本身 + 它是不是「占位」（无法忠实合成的类型）。</summary>
     public sealed record DefaultArg(string Name, string Type, KArg Value, bool IsPlaceholder);
 

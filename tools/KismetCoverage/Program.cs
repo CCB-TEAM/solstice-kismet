@@ -33,18 +33,23 @@ var catalogIndex = Array.IndexOf(args, "--catalog");
 var catalogPath = catalogIndex >= 0 && catalogIndex + 1 < args.Length ? args[catalogIndex + 1] : null;
 var planIndex = Array.IndexOf(args, "--plan");
 var planFunction = planIndex >= 0 && planIndex + 1 < args.Length ? args[planIndex + 1] : null;
+var importsIndex = Array.IndexOf(args, "--imports");
+var importProbe = importsIndex >= 0 && importsIndex + 1 < args.Length ? args[importsIndex + 1] : null;
 
-if (!Directory.Exists(assetDir))
+if (!Directory.Exists(assetDir) && !File.Exists(assetDir))
 {
-    Console.Error.WriteLine($"目录不存在: {assetDir}");
+    Console.Error.WriteLine($"路径不存在: {assetDir}");
     return 2;
 }
 
 var usmap = new Usmap(usmapPath);
-var files = Directory.GetFiles(assetDir, "*.uasset", SearchOption.AllDirectories)
-    .OrderBy(f => f, StringComparer.Ordinal)
-    .Take(maxAssets)
-    .ToArray();
+// 第一个参数既可以是目录，也可以是单个 .uasset
+var files = File.Exists(assetDir)
+    ? new[] { assetDir }
+    : Directory.GetFiles(assetDir, "*.uasset", SearchOption.AllDirectories)
+        .OrderBy(f => f, StringComparer.Ordinal)
+        .Take(maxAssets)
+        .ToArray();
 
 Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPath)}" + (useWorkspace ? "（走 KismetWorkspace 门面）" : ""));
 
@@ -56,6 +61,11 @@ if (insertCallee is not null)
 if (planFunction is not null)
 {
     return RunPlan(files, usmapPath, planFunction, catalogPath);
+}
+
+if (importProbe is not null)
+{
+    return RunImports(files, usmapPath, importProbe, catalogPath);
 }
 
 if (useWorkspace)
@@ -347,6 +357,48 @@ static int RunPlan(string[] files, string usmapPath, string function, string? ca
 
     Directory.Delete(workDir, true);
     return plan.Pins.Count > 0 ? 0 : 1;
+}
+
+// 打印「新建调用会补出哪些 Import」：函数条目本身 + 它的 outer 链。
+// 用来核对新增导入到底是克隆来的还是合成的。
+static int RunImports(string[] files, string usmapPath, string callee, string? catalogPath)
+{
+    if (catalogPath is null || !File.Exists(catalogPath))
+    {
+        Console.Error.WriteLine("--imports 需要 --catalog <functions.json>");
+        return 2;
+    }
+
+    var workDir = Path.Combine(Path.GetTempPath(), "kismet-imports-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(workDir);
+
+    var file = files.FirstOrDefault(f => File.Exists(Path.ChangeExtension(f, ".uexp")));
+    if (file is null)
+    {
+        Console.Error.WriteLine("没有可用资产");
+        return 2;
+    }
+
+    var uassetBytes = File.ReadAllBytes(file);
+    var uexpBytes = File.ReadAllBytes(Path.ChangeExtension(file, ".uexp"));
+    var usmapBytes = File.ReadAllBytes(usmapPath);
+    var catalog = FunctionCatalog.Load(File.ReadAllText(catalogPath));
+
+    var ws = KismetWorkspace.Open(uassetBytes, uexpBytes, usmapBytes, workDir);
+    ws.AttachCatalog(catalog);
+
+    var before = ws.ImportCount;
+    ws.CreateCall(callee);              // 触发 EnsureFunction
+    var after = ws.ImportCount;
+
+    Console.WriteLine($"资产 {Path.GetFileName(file)}: Import {before} -> {after}（新增 {after - before}）");
+    foreach (var line in ws.DescribeImports(callee))
+    {
+        Console.WriteLine("  " + line);
+    }
+
+    Directory.Delete(workDir, true);
+    return 0;
 }
 
 static int RunInsert(string[] files, string usmapPath, string callee, string? catalogPath)

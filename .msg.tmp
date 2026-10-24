@@ -1,0 +1,11 @@
+feat(diag): 可查新增 Import 的字段来源（克隆 vs 合成）
+
+- KismetWorkspace.ImportCount / DescribeImports(name)：打印函数导入及其 outer 链，
+  含 ClassPackage / PackageName，用于核对新增条目到底是克隆来的还是按约定合成的。
+- KismetCoverage 加 --imports <callee>；第一个参数现在也接受单个 .uasset。
+
+实测对照：
+  克隆路径 BP_Chat + MSSDKEnterGameScene → idx=-125 Function -> -124 Class MssdkFunctions
+    -> -94 Package /Script/kards，clsPkg=/Script/CoreUObject
+  合成路径 Interface_UserInput（全资产仅 9 个导入）→ 同样得到 clsPkg=/Script/CoreUObject
+两条路径字段完全一致，说明「按约定合成」与资产里的真实模板同源。
