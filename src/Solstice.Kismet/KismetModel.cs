@@ -115,6 +115,12 @@ public sealed record LongArg(long Value) : KArg(PinType.Int);
 /// <summary>基本类型转换，对应 EX_PrimitiveCast（ConversionType + Target）。</summary>
 public sealed record PrimitiveCastArg(KArg Target, ECastToken Conversion) : KArg(PinType.Int);
 
+/// <summary>
+/// 原样保留的表达式。用于结构复杂、重新构造容易出错的指令
+/// （如 EX_SwitchValue 含相对偏移）。回编译时直接发回原对象，保证字节一致。
+/// </summary>
+public sealed record RawArg(KismetExpression Expression) : KArg(PinType.Object);
+
 /// <summary>数组字面量，对应 EX_ArrayConst。</summary>
 public sealed record ArrayConstArg(KismetPropertyPointer Inner, IReadOnlyList<KArg> Elements)
     : KArg(PinType.Struct);

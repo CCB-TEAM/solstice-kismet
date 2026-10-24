@@ -233,6 +233,10 @@ public static class KismetCompiler
                         Target = ToExpr(pc.Target)
                     };
 
+                case RawArg ra:
+                    // 原样发回：结构复杂的指令不做重建
+                    return ra.Expression;
+
                 case ArrayConstArg ac:
                     return new EX_ArrayConst
                     {

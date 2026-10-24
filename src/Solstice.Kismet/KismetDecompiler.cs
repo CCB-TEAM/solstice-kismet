@@ -438,6 +438,8 @@ public static class KismetDecompiler
         EX_PrimitiveCast pc => new PrimitiveCastArg(
             ToArg(pc.Target, options) ?? new IntArg(0),
             pc.ConversionType),
+        // 含相对偏移，重建容易出错，原样保留
+        EX_SwitchValue sv => new RawArg(sv),
         EX_ArrayConst ac => new ArrayConstArg(ac.InnerProperty!, ToArgs(ac.Elements, options)),
         EX_TextConst t => new TextArg(t.Value),
         EX_StructConst st => new StructConstArg(st.Struct, st.StructSize, ToArgs(st.Value, options)),
