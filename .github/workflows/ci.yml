@@ -21,3 +21,6 @@ jobs:
 
       - name: Build
         run: dotnet build src/Solstice.Kismet/Solstice.Kismet.csproj -c Release --no-restore
+
+      - name: Verify
+        run: dotnet run --project tests/Solstice.Kismet.Verify -c Release

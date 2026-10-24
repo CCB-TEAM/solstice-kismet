@@ -123,3 +123,42 @@ Function  cls=Function  outer=类
 ## 许可
 
 MIT
+
+## 反编译（结构还原）
+
+`KismetDecompiler` 把字节码还原成平铺节点模型，用于**检查既有函数**和**把函数读回编辑器**。
+
+```csharp
+var nodes = KismetDecompiler.Decompile(
+    fn.ScriptBytecode!,
+    new DecompileOptions(
+        Measure: e => e.GetSize(asset),                    // 必需，跳转是字节偏移
+        ResolveImport: idx => importNames.TryGetValue(idx.Index, out var n) ? n : null));
+```
+
+### 能还原什么
+
+`EX_Let` / `EX_LetBool` / `EX_FinalFunction` / `EX_Context` / `EX_LocalVirtualFunction` /
+`EX_JumpIfNot` + `EX_Jump`（还原成 `IfNode` / `LoopNode`）/ `EX_Return`。
+
+不认识的表达式退化成 `RawNode`，**保留原文不丢弃**（`Title` 形如 `<JumpIfNot>`）。
+
+### 边界：这不是语义往返
+
+本库的生成方向是单向的（见 `docs/decisions/0001`）。反编译只做**结构还原**：
+
+- 变量名来自 `FFieldPath` 的最后一段，不含类型信息
+- 函数名要靠 `ResolveImport` 从 Import 表解析，解析不到时显示 `<import -19>` 这种占位
+- `EX_True` / `EX_False` 还原成 `IntArg(1)` / `IntArg(0)`，布尔语义丢失
+- 嵌套调用的形态（`CallArg`）能还原，但参数名依赖函数签名表，不在字节码里
+
+所以：**反编译结果可以读、可以改、可以再生成**，但不保证与原始源码逐节点等价。
+
+## 自检
+
+```bash
+dotnet run --project tests/Solstice.Kismet.Verify
+```
+
+16 项断言，覆盖扁平序列、带参调用、if、loop、以及「没有 measure 时不崩且保留原文」。
+全部使用手工构造的表达式树，**不依赖任何游戏资产**。
