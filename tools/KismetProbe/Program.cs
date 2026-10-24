@@ -116,18 +116,7 @@ Console.WriteLine($"  逐字节一致: {same}");
 
 if (!same)
 {
-    var n = Math.Min(originalBytes.Length, regeneratedBytes.Length);
-    for (var i = 0; i < n; i++)
-    {
-        if (originalBytes[i] != regeneratedBytes[i])
-        {
-            Console.WriteLine($"  首个差异在字节 {i}: 原={originalBytes[i]:x2} 新={regeneratedBytes[i]:x2}");
-            break;
-        }
-    }
-
-    Console.WriteLine($"  原始前 40: {Convert.ToHexString(originalBytes.Take(40).ToArray())}");
-    Console.WriteLine($"  新   前 40: {Convert.ToHexString(regeneratedBytes.Take(40).ToArray())}");
+    KismetProbe.StructuralDiff.Report(bytecode, regenerated, asset);
 }
 
 Directory.Delete(work, true);
