@@ -9,7 +9,8 @@ namespace Solstice.Kismet;
 /// </summary>
 public sealed record DecompileOptions(
     Func<KismetExpression, uint>? Measure = null,
-    Func<FPackageIndex, string?>? ResolveImport = null);
+    Func<FPackageIndex, string?>? ResolveImport = null,
+    Action<string>? Warn = null);
 
 /// <summary>
 /// Kismet 字节码 → 平铺节点模型。
@@ -191,6 +192,7 @@ public static class KismetDecompiler
         var exit = IndexOfOffset(offsets, jumpIfNot.CodeOffset);
         if (exit < 0 || exit <= start)
         {
+            options.Warn?.Invoke($"[{start}] JumpIfNot 落点无效：exit={exit} start={start} target={jumpIfNot.CodeOffset}");
             return null;
         }
 
@@ -205,16 +207,31 @@ public static class KismetDecompiler
             }
         }
 
+        // 体内末尾没有 EX_Jump → 这是「没有 else 的 if」：
+        // 条件 → JumpIfNot(结束) → 体内，落点之后直接继续。
         if (jumpIndex < 0)
         {
-            return null;
+            var plainCond = ToArg(jumpIfNot.BooleanExpression, options)
+                            ?? throw new InvalidOperationException(
+                                $"分支条件表达式 {jumpIfNot.BooleanExpression?.Inst} 暂不支持");
+
+            var plainBody = Decompile(Slice(expressions, start + 1, exit), options);
+            var plainNext = exit;
+            while (plainNext < expressions.Count && expressions[plainNext] is EX_Nothing)
+            {
+                plainNext++;
+            }
+
+            return new Block(new IfNode(plainCond, plainBody), plainNext);
         }
 
         var jump = (EX_Jump)expressions[jumpIndex];
         var backTarget = IndexOfOffset(offsets, jump.CodeOffset);
 
         var body = Decompile(Slice(expressions, start + 1, jumpIndex), options);
-        var cond = ToArg(jumpIfNot.BooleanExpression, options) ?? new IntArg(0);
+        var cond = ToArg(jumpIfNot.BooleanExpression, options)
+                   ?? throw new InvalidOperationException(
+                       $"分支条件表达式 {jumpIfNot.BooleanExpression?.Inst} 暂不支持");
 
         // 回跳到起点之前 → 循环；否则 → 条件分支
         var isLoop = backTarget >= 0 && backTarget <= start;
