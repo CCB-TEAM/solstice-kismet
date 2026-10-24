@@ -344,6 +344,25 @@ static string Describe(KNode node, int depth)
 
         case LoopNode l:
             return $"{pad}Loop ({Arg(l.Condition)})\n" + string.Join("\n", l.Body.Select(n => Describe(n, depth + 1)));
+        case BlockGraphNode graph:
+        {
+            var head = $"{pad}BlockGraph {graph.Blocks.Count} 块";
+            return head + "\n" + string.Join("\n", graph.Blocks.Select(b => Describe(b, depth + 1)));
+        }
+
+        case BasicBlockNode block:
+        {
+            var target = block.TargetIndex is { } t ? $" -> #{t}" : "";
+            var cond = block.Condition is { } c ? $" ({Arg(c)})" : "";
+            var head = $"{pad}#{block.Index} @{block.StartOffset} {block.Exit}{target}{cond}";
+            if (block.Nodes.Count == 0)
+            {
+                return head;
+            }
+
+            return head + "\n" + string.Join("\n", block.Nodes.Select(n => Describe(n, depth + 1)));
+        }
+
         case UberGraphNode uber:
         {
             var head = $"{pad}UberGraph dispatch={Arg(uber.DispatchExpression)}" +

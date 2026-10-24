@@ -44,6 +44,9 @@ Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPat
 var total = 0;
 var passed = 0;
 var degraded = 0;
+var treeCount = 0;
+var blockGraphCount = 0;
+var flatCount = 0;
 var assetFailures = 0;
 var failures = new List<(string Asset, string Function, string Reason)>();
 var degradedList = new List<(string Asset, string Function, string Warn)>();
@@ -92,17 +95,24 @@ foreach (var file in files)
                     KismetCompiler.CompileToExpressions(ns, null, null, e => e.GetSize(asset), n => new FName(asset, n)),
                     asset);
 
-                var attempts = new[] { options, options with { FoldBottomLoops = false } };
+                var attempts = new[]
+                {
+                    options,
+                    options with { FoldBottomLoops = false },
+                    options with { UseBlockGraph = true }
+                };
                 var structuredSame = false;
                 IReadOnlyList<KNode>? finalNodes = null;
+                var attemptIndex = -1;
 
-                foreach (var attempt in attempts)
+                for (var a = 0; a < attempts.Length; a++)
                 {
-                    var candidate = KismetDecompiler.Decompile(bytecode, attempt);
+                    var candidate = KismetDecompiler.Decompile(bytecode, attempts[a]);
                     if (originalBytes.AsSpan().SequenceEqual(Recompile(candidate)))
                     {
                         structuredSame = true;
                         finalNodes = candidate;
+                        attemptIndex = a;
                         break;
                     }
                 }
@@ -110,14 +120,22 @@ foreach (var file in files)
                 if (!structuredSame)
                 {
                     degraded++;
+                    flatCount++;
                     degradedList.Add((assetName, fn.ObjectName.ToString(), firstWarn ?? "(无告警)"));
                     finalNodes = KismetDecompiler.Decompile(bytecode, options with { Flatten = true });
+                }
+                else if (attemptIndex == attempts.Length - 1)
+                {
+                    blockGraphCount++;
+                }
+                else
+                {
+                    treeCount++;
                 }
 
                 var rebuilt = KismetCompiler.CompileToExpressions(
                     finalNodes!, null, null, e => e.GetSize(asset), n => new FName(asset, n));
                 var finalBytes = Serialize(rebuilt, asset);
-
                 if (originalBytes.AsSpan().SequenceEqual(finalBytes))
                 {
                     passed++;
@@ -160,7 +178,10 @@ Console.WriteLine($"资产          : {files.Length}（打开失败 {assetFailur
 Console.WriteLine($"函数          : {total}");
 Console.WriteLine($"逐字节一致    : {passed}");
 Console.WriteLine($"失败          : {total - passed}");
-Console.WriteLine($"结构化退化    : {degraded}（字节仍一致，只是退回扁平）");
+Console.WriteLine($"结构化退化    : {degraded}（退回扁平）");
+Console.WriteLine($"  树形结构化  : {treeCount}");
+Console.WriteLine($"  基本块图    : {blockGraphCount}");
+Console.WriteLine($"  扁平        : {flatCount}");
 
 if (showDegraded && degradedList.Count > 0)
 {

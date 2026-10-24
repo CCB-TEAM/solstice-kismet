@@ -13,7 +13,8 @@ public sealed record DecompileOptions(
     Action<string>? Warn = null,
     bool Flatten = false,
     bool InsideUberSection = false,
-    bool FoldBottomLoops = true);
+    bool FoldBottomLoops = true,
+    bool UseBlockGraph = false);
 
 /// <summary>
 /// Kismet 字节码 → 平铺节点模型。
@@ -51,6 +52,27 @@ public static class KismetDecompiler
             if (uber is not null)
             {
                 return DecompileUber(expressions, uber, options);
+            }
+
+            // 基本块 + 显式 goto：给「跳转越出片段、还原不成树」的函数留的可读出口
+            if (options.UseBlockGraph)
+            {
+                var blocks = BlockGraph.Build(expressions, options);
+                if (blocks.Count > 0)
+                {
+                    var starts = blocks.Select(b => b.StartOffset).ToArray();
+                    var nodes2 = blocks.Select(b => new BasicBlockNode(
+                        b.Index,
+                        b.StartOffset,
+                        b.Nodes,
+                        b.Exit,
+                        b.BranchTarget is { } target && Array.IndexOf(starts, target) is var idx && idx >= 0
+                            ? idx
+                            : null,
+                        b.Condition)).ToList();
+
+                    return new KNode[] { new BlockGraphNode(nodes2) };
+                }
             }
         }
 
@@ -371,7 +393,7 @@ public static class KismetDecompiler
         return Decompile(expressions, options with { Flatten = true }, baseOffset);
     }
 
-    /// <summary>结构化还原的尝试顺序：先花式，再保守。</summary>
+    /// <summary>结构化还原的尝试顺序：先花式，再保守，最后基本块图。</summary>
     private static IEnumerable<DecompileOptions> Attempts(DecompileOptions options)
     {
         yield return options;
@@ -380,10 +402,14 @@ public static class KismetDecompiler
         {
             yield return options with { FoldBottomLoops = false };
         }
+
+        yield return options with { FoldBottomLoops = true, UseBlockGraph = true };
     }
 
     private static string Describe(DecompileOptions options)
-        => options.FoldBottomLoops ? "折叠底部循环" : "保守";
+        => options.UseBlockGraph ? "基本块图"
+            : options.FoldBottomLoops ? "折叠底部循环"
+            : "保守";
 
     /// <summary>
     /// 未识别/未归类的表达式。回编译时**原样发回去**——

@@ -855,6 +855,64 @@ public static class KismetCompiler
                     break;
                 }
 
+                case BlockGraphNode graph:
+                {
+                    // 基本块图：块的顺序就是指令顺序，只把跳转目标按块标号重算，
+                    // 所以产出的字节与原始完全一致。
+                    var blockStart = new int[graph.Blocks.Count];
+                    var pending = new List<(KismetExpression Jump, int Target)>();
+                    var endIdx = result.Count;
+
+                    for (var i = 0; i < graph.Blocks.Count; i++)
+                    {
+                        var block = graph.Blocks[i];
+                        blockStart[i] = result.Count;
+
+                        foreach (var n in block.Nodes)
+                        {
+                            EmitNode(n);
+                        }
+
+                        switch (block.Exit)
+                        {
+                            case BlockExit.Jump:
+                            {
+                                var jump = new EX_Jump();
+                                result.Add(jump);
+                                if (block.TargetIndex is { } target)
+                                {
+                                    pending.Add((jump, target));
+                                }
+
+                                break;
+                            }
+
+                            case BlockExit.JumpIfNot:
+                            {
+                                var jumpIfNot = new EX_JumpIfNot
+                                {
+                                    BooleanExpression = block.Condition is { } cond ? ToExpr(cond) : new EX_Nothing()
+                                };
+                                result.Add(jumpIfNot);
+                                if (block.TargetIndex is { } target)
+                                {
+                                    pending.Add((jumpIfNot, target));
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+
+                    endIdx = result.Count;
+                    foreach (var (jump, target) in pending)
+                    {
+                        patches.Add((jump, target < blockStart.Length ? blockStart[target] : endIdx));
+                    }
+
+                    break;
+                }
+
                 case KismetDecompiler.RawNode raw:
                     // 未归类的表达式（如孤立的 EX_Jump）原样发回去，
                     // 丢掉会让后面所有指令错位。

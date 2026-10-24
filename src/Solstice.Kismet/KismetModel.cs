@@ -457,6 +457,25 @@ public sealed record UberSectionNode(
         (TargetOrdinal is { } t ? $" -> #{t}" : ""));
 
 /// <summary>
+/// 基本块图：函数无法还原成嵌套树时的可读表示（同一指令流的划分，只把跳转换成块标号）。
+/// </summary>
+public sealed record BlockGraphNode(IReadOnlyList<BasicBlockNode> Blocks)
+    : KNode($"BlockGraph ({Blocks.Count} 块)");
+
+/// <summary>基本块图里的一块：直线代码 + 出口。</summary>
+public sealed record BasicBlockNode(
+    int Index,
+    uint StartOffset,
+    IReadOnlyList<KNode> Nodes,
+    BlockExit Exit,
+    int? TargetIndex = null,
+    KArg? Condition = null)
+    : KNode(
+        $"Block #{Index} @{StartOffset} " + Exit +
+        (TargetIndex is { } t ? $" -> #{t}" : "") +
+        (Condition is { } c ? $" ({ArgRender.Of(c)})" : ""));
+
+/// <summary>
 /// 整个 ubergraph：调度头 + 各入口段 + 尾声。
 ///
 /// <para>

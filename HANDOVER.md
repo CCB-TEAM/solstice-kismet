@@ -16,7 +16,7 @@
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **55/55** |
+| 自检 `tests/Solstice.Kismet.Verify` | **59/59** |
 | 真实资产往返一致（`Logic` 28 资产 + `Cards` 2053 资产） | **8115 / 8115 (100%)** |
 | 结构还原退化（6 资产口径 131 函数） | **3 个函数**（原 47 个） |
 | CI | 绿 |
@@ -46,6 +46,7 @@ src/Solstice.Kismet/
   KismetModel.cs       节点/KArg 模型、CallShape、AssignKind、PinType
   KismetCompiler.cs    节点 → KismetExpression
   KismetDecompiler.cs  KismetExpression → 节点（含 if/loop 结构还原）
+  BlockGraph.cs        基本块图：树还原不了时的可读表示（显式 goto）
   KismetExprBuilder.cs 简单表达式构造
   ExpressionWalker.cs  变量索引（名字 → KismetPropertyPointer）
   ImportIndex.cs       Import 表 → 函数索引
@@ -56,7 +57,7 @@ src/Solstice.Kismet/
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
 tools/KismetCoverage/  同进程批量覆盖率：一次扫完整个目录，输出失败原因聚类
-tests/Solstice.Kismet.Verify/  55 项自检
+tests/Solstice.Kismet.Verify/  59 项自检
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 ```
@@ -157,36 +158,30 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 
 ### 可读性现状（全语料 2081 资产 / 8115 函数）
 
-| 指标 | 初值 | 现在 |
-|---|---|---|
-| 结构化退化（整函数退回扁平） | 183 | **114**（Logic 21 / Cards 93，约 1.4%） |
+**扁平退化已归零**：每个函数现在都能拿到三种可读表示之一，且字节永远一致。
 
-读法：退化只影响可读性，**字节永远一致**——这是 `DecompileVerified` 的硬保证。
+| 表示 | Logic (1328) | Cards (6787) | 合计 | 占比 |
+|---|---:|---:|---:|---:|
+| 树形结构化（if/loop/赋值…） | 1307 | 6694 | **8001** | 98.6% |
+| 基本块图（显式 goto） | 21 | 93 | **114** | 1.4% |
+| ubergraph 展开 | 12 | 0 | 12 | 含在上面的树形里 |
+| 扁平退化 | 0 | 0 | **0** | 0% |
 
-两处关键改进：
+三处关键设计：
 
 1. **底部测条件的循环**（UE 编译 `for` 的形态）：回跳目标是**循环体开头**而不是条件，
-   旧模型套「条件在顶部」会把回跳补错位置。新增 `BottomLoopNode`，按
-   `体 → 条件 → JumpIfNot(exit) → 尾段 → Jump(体开头)` 重建。
-2. **结构化尝试是「机会性」的**：折叠对一部分函数有益（Logic 57→21），
-   对另一部分有害（Cards 一度 126→143）。所以 `DecompileVerified` 现在按
-   「折叠 → 不折叠 → 扁平」逐级尝试，**用字节比对裁决**，而不是一刀切。
+   旧模型套「条件在顶部」会把回跳补错位置。新增 `BottomLoopNode`。
+2. **机会性结构化**：折叠对一部分函数有益（Logic 57→21）、对另一部分有害（Cards 126→143），
+   所以按「折叠 → 不折叠 → 基本块图」逐级尝试，**用字节比对裁决**。
+3. **基本块图兜底**（`BlockGraphNode`）：它是对同一指令流的**划分**，不重排任何指令，
+   只把跳转换成块标号（`JumpIfNot -> #9`），所以字节仍然逐字节一致。
+   树还原不了的共享尾部/状态机因此变成「可读但非树形」，而不是退化成纯指令流。
 
-剩余 114 个的主因（合计 102 个）：`JumpIfNot 目标越出片段`——共享尾部/状态机的出口
-落在当前片段之外。下一步要么做「目标标签」机制（允许跳转指向尚未发射的位置），
-要么对这类函数改走「基本块 + 显式 goto」的输出形态，而不是继续硬凑嵌套。
+副作用：`K2Node_SwitchName` 那种「8 连 `JumpIfNot` + 集中 case 体」现在在块图里一眼可读
+（8 个块都对同一个 `CmpSuccess` 做 `NotEqual_NameName`，然后跳到不同 case 块）。
 
-另有 12 个「无告警」退化：结构还原自认为成功但字节不符，多与回边目标早于重建的循环头有关。
-
-12 个 `ExecuteUbergraph_*` 已经全部**展开**成「调度头 + 入口段 + 尾声」
-（`UberGraphNode`），不再进入退化流程，细节见 [docs/ubergraph.md](docs/ubergraph.md)：
-
-- 段名从段首的 `CallMulticastDelegate` 还原，**667 段全部命名**（`BP_Chat` 四段就是
-  `OnChatMinimized` / `OnChatCreated` / `OnChatClosed` + `UpdateMessageNotifications`）
-- `KismetCompiler.BakeUbergraph` 重新烘焙并**返回入口偏移表**，
-  12/12 与原表逐项相等——这张表就是要写回 `UClass` 事件引用的东西
-
-下一步对普通函数该做的是按跳转目标建基本块图，而不是继续加节点类型。
+下一步可读性方向：把这 114 个块图函数里的常见形状**再提升回树形**，
+优先 `SwitchName` 级联（可识别成 `SwitchNode`），而不是继续堆节点类型。
 
 ## 七、工具用法
 
@@ -266,7 +261,7 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 55/55
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 59/59
 
 .\tools\coverage.ps1 `
   -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
@@ -274,7 +269,7 @@ dotnet run --project tests\Solstice.Kismet.Verify     # 必须 55/55
 # 必须 8115 / 8115
 ```
 
-**提交前必须两项都绿**：自检 55/55 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 59/59 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git

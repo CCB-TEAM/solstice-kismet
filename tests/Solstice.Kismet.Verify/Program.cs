@@ -370,5 +370,36 @@ var options = new DecompileOptions(Measure, ResolveImport);
         $"{((rebuilt[2] as EX_JumpIfNot)?.CodeOffset)}");
 }
 
+// ---- 13. 基本块图：还原不成树时的可读出口，字节必须一致 ----
+// [0]IntConst@0 [1]Jump->15@5 [2]IntConst@10 [3]IntConst@15 [4]Return@20 [5]EndOfScript@21
+// leader = {0} ∪ 跳转目标 {3} ∪ 跳转的下一条 {2}
+{
+    var exprs = new KismetExpression[]
+    {
+        new EX_IntConst { Value = 1 },
+        new EX_Jump { CodeOffset = 15 },
+        new EX_IntConst { Value = 2 },
+        new EX_IntConst { Value = 3 },
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var graphNodes = KismetDecompiler.Decompile(
+        exprs, options with { UseBlockGraph = true });
+
+    Check("基本块图: 顶层是 BlockGraphNode", graphNodes[0] is BlockGraphNode, graphNodes[0].GetType().Name);
+
+    var graph = graphNodes[0] as BlockGraphNode;
+    Check("基本块图: 块数", graph?.Blocks.Count == 3, $"{graph?.Blocks.Count}");
+    Check("基本块图: 首块以跳转结束",
+        graph?.Blocks[0] is { Exit: BlockExit.Jump, TargetIndex: 2 },
+        $"{graph?.Blocks[0].Exit}/{graph?.Blocks[0].TargetIndex}");
+
+    var rebuilt = KismetCompiler.CompileToExpressions(
+        graphNodes, new CompileContext(Measure: Measure));
+    Check("基本块图: 跳转目标重算回原值", rebuilt[1] is EX_Jump { CodeOffset: 15 },
+        $"{((rebuilt[1] as EX_Jump)?.CodeOffset)}");
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;
