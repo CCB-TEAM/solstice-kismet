@@ -12,26 +12,32 @@
 
 核心指标是**往返逐字节一致**（decompile → compile → 序列化，与原始字节完全相同）。
 
-## 二、当前状态（提交 `c498dd4` 之后）
+## 二、当前状态
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **19/19** |
-| 真实资产往返一致 | **131 / 131 (100%)** |
+| 自检 `tests/Solstice.Kismet.Verify` | **33/33** |
+| 真实资产往返一致（`Blueprints/Logic` 全部 28 个资产） | **1305 / 1305 (100%)** |
+| 结构还原退化（6 资产口径 131 函数） | **7 个函数**（原 47 个） |
 | CI | 绿 |
 
-测试样本：`D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic` 下 6 个资产的**全部**函数
-（`BP_Chat`、`BP_MatchData`、`BPC_TurnTimer`、`BP_LevelManager`、`BP_NotificationManager`、`BPC_ChallengeAndRematch`）。
+> **分母修正**：文档曾记 118/119，那是**错的分母**。探针列函数时用了 `.Take(30)`，
+> `BPC_ChallengeAndRematch` 实际 48 个函数被截到 30 个。去掉截断后 6 资产是 131 个函数，
+> 扩到 `Logic` 全部 28 个资产是 **1305** 个函数。这正是第十节第 4 条的复发。
 
-> **分母修正**：文档此前记的 118/119 是**错的分母**。探针列函数时用了 `.Take(30)`，
-> `BPC_ChallengeAndRematch` 实际有 48 个函数、被截到 30 个，所以按旧口径最多只能测到 113 个函数，
-> 有 18 个从未跑过。去掉截断后全量是 **131** 个函数，全部通过。
-> 这正是第十节第 4 条「覆盖率必须核对分母」的复发。
+测试样本：`D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic` 下**全部**资产
+（其中 4 个没有带字节码的函数：`BP_HandCardRichTextCache`、`E_PreGameStates`、
+`S_KnockoutStatus`、`S_SalvagedCardInfo`）。
 
-原先唯一的失败 `BP_LevelManager.ExecuteUbergraph_BP_LevelManager`（`Context 长度 37 vs 36`）
-已修复：`EX_Context.ObjectExpression` 里包着的是 **`EX_InterfaceContext`**，
-反编译把包装层脱掉了，回编译只剩里面的 `EX_LocalVariable`，每条少 1 字节。
-修法是新增 `InterfaceContextArg` 原样保留（见第四节）。
+已修复的两批问题：
+
+1. **字节保真**：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 的 `Context 37 vs 36`——
+   `EX_Context.ObjectExpression` 里包着 `EX_InterfaceContext`，反编译把包装层脱掉了。
+   新增 `InterfaceContextArg` 原样保留（见第四节）。
+2. **可读性**：结构还原退化从 47 个函数降到 7 个，见第六节。
+   顺带补齐了 8 类指令（`MetaCast` / `ClassContext` / `DefaultVariable` / `ArrayGetByRef` /
+   `UnicodeStringConst` / `InstanceDelegate` / `TransformConst` / `MapConst`），
+   这才让 28 资产全量跑通。
 
 ## 三、目录结构
 
@@ -48,7 +54,7 @@ src/Solstice.Kismet/
   KismetWorkspace.cs   对外门面：加载资产、选函数、编译、回写
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
-tests/Solstice.Kismet.Verify/  19 项自检
+tests/Solstice.Kismet.Verify/  33 项自检
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 ```
 
@@ -91,7 +97,7 @@ docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出
 3. 与原始字节比对
 4. **不符就退回扁平模式**（`options.Flatten = true`，纯指令、不还原 if/loop）
 
-所以任何结构还原的改动，只要扁平模式仍是 131/131，就不会破坏保真性。
+所以任何结构还原的改动，只要扁平模式仍是 1305/1305，就不会破坏保真性。
 
 ## 五、必须知道的 UAssetAPI 陷阱
 
@@ -128,17 +134,36 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 | 无 else 的 if | 没有配对 `EX_Jump` | `IfNode`，body 到 exit |
 | 结构结束点 | `Jump` 目标 > `JumpIfNot` 落点时取 `Jump` 目标 | 避免整段代码丢失 |
 
-**已知局限**：`K2Node_SwitchName` 编译出的「8 连 `JumpIfNot` + 集中 case 体」无法还原成 switch 结构。这类函数靠 `DecompileVerified` 的自动退化保证字节正确，但可读性差。
+**已知局限**：`K2Node_SwitchName` 编译出的「8 连 `JumpIfNot` + 集中 case 体」无法还原成 switch 结构。
 
 `EX_SwitchValue` 目前走 `RawArg` 原样保留，**没有做结构化还原**。
 
 > 每条指令的 token、操作数顺序、语义与出现场景，见 **[docs/bytecode.md](docs/bytecode.md)**。
 > 改反编译器/编译器之前先查这张表，尤其第十节「最容易混的几组」。
 
-**残留的结构还原 bug**：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 现在字节一致了，
-但结构化模式仍会打印 `[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，
-回编译 4249 vs 原始 4195，最后靠自动退化走扁平模式。纯可读性问题，不影响字节。
-下一条给了排查方向。
+### 结构还原的两条硬规则（都是踩出来的）
+
+**规则一：跳转落点越出当前片段就放弃结构化。** 共享尾部 / 状态机的跳转目标会指向外层代码，
+用嵌套 if 硬表达只会让补丁偏移错位。现在 `BuildBlock` 检测到 `exit >= expressions.Count`
+就返回 null，把这一条 `JumpIfNot` 原样保留，外层继续照常还原。
+
+**规则二：落点占位 `EX_Nothing` 按原始字节补，不能无条件补。** 反编译器把 `EX_Nothing` 全部跳过，
+所以「原本有没有这个占位字节」必须记进 `IfNode.EndsWithNothing` / `LoopNode.EndsWithNothing`，
+否则回编译要么多 1 字节、要么少 1 字节。同理，**无 else 的 if 绝对不能再补 `EX_Jump`**
+（UE 的条件为假时直接落到 then 之后）——补了就是 5 个多余字节。
+
+### 可读性现状（6 资产 131 函数）
+
+| 指标 | 修前 | 现在 |
+|---|---|---|
+| 结构还原退化（整函数退回扁平） | 47 | **7** |
+| Raw 节点总数 | 260 | 190 |
+
+剩下 7 个都是 `ExecuteUbergraph_*` 这类状态机（`BPC_TurnTimer`、`BP_NotificationManager`、
+`BP_Chat`、`BPC_ChallengeAndRematch`、`BP_LevelManager.TryToGoHome`、
+`BPC_ChallengeAndRematch.ParseNotification`、`BPC_TurnTimer.setTimedOutAfterReconnect`）。
+它们字节完全一致，只是嵌套结构还还原不出来——下一步该做的是按跳转目标建基本块图
+（探针已有基本块分析代码可参考），而不是继续加节点类型。
 
 ## 七、工具用法
 
@@ -191,15 +216,15 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 19/19
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 33/33
 
 .\tools\coverage.ps1 `
   -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
   -Usmap    'D:\devenv\fmodel\Output\.data\kards1.60_No_UE4SS.jmap.3f2e5a28df2c1f777a1e80.usmap'
-# 必须 131 / 131
+# 必须 1305 / 1305
 ```
 
-**提交前必须两项都绿**：自检 19/19 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 33/33 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git
@@ -233,14 +258,37 @@ PowerShell 的 `.Replace()` 不匹配时**静默返回原字符串**，看不出
 
 ### 2. 平行结构必须同步改
 
-这个项目里有三对平行节点，改一个漏一个会留下隐患：
+这个项目里有四对平行节点，改一个漏一个会留下隐患：
 
 | 平行对 | 漏改次数 |
 |---|---|
 | `AssignNode` / `AssignBoolNode` | 1 |
-| `ContextCallNode` / `CallArg` | 1 |
+| `ContextCallNode` / `CallArg` | 2 |
+| `ContextMemberArg` / `CallArg`（`ContextKind`） | 1 |
+| `PointerArg` 的三个形态标志（`Instance`/`Out`/`Default`） | 1 |
 
 改模型前先 `grep` 出同后缀的 record，一次性对齐。
+
+### 2.1 结构还原曾经有一个「必错」的 bug（2026-10 修）
+
+编译器 `IfNode` 分支把 `JumpIfNot` 的补丁目标取成 `result.Count`（= **then 体开头**），
+而不是 then 体之后的 else 起点。也就是说**所有带 then 体的 if 结构重建都是错的**，
+只是被 `DecompileVerified` 的自动退化掩盖成「扁平」——这正是 47 个函数退化的主因。
+当时的代码：
+
+```csharp
+var elseIdx = result.Count;   // ❌ 此时还指向 then 体，之后再没更新
+foreach (var n in f.Then) EmitNode(n);
+```
+
+教训：**结构化模式的输出不会直接跑到用户面前**（退化会兜住），所以它的 bug 极难被发现。
+判断可读性有没有真的变好，不能只看「字节一致」，要统计「退化函数数」。
+
+### 2.2 `StackNode` 必须在每个调用节点上都保留
+
+`ContextCallNode` 一度没有 `StackNode` 字段，回编译只能按函数名查 Import 表——
+同名导入有多个时就会取错索引（实测 `-353` 变成 `-337`，结构完全一致但字节不同）。
+`CallArg` 早就保留了，`ContextCallNode` 漏了。这正是第 2 条「平行结构」的又一次翻车。
 
 ### 3. 探针输出为空时，先怀疑进程崩溃
 
@@ -263,20 +311,26 @@ PowerShell 的 `.Replace()` 不匹配时**静默返回原字符串**，看不出
 判断是否受沙箱限制时还要注意：**pwsh 自身的文件操作可能成功，而 `dotnet` 子进程被拒**，
 所以「我用 pwsh 能读」不能推出「探针能读」。
 
+### 6. `StructuralDiff` 曾漏比标量字段
+
+它只递归比对子表达式，**跳过了偏移、指针、包索引、常量值**。于是会出现最难查的一种情况：
+输出「结构完全一致」，但字节就是不同。补上标量比对后，一步就定位到
+`ContextExpression.StackNode: -353 vs -337`。现在它会直接打印 `✗ [路径.字段] 取值不同`。
+
+### 7. 测试数据造假会掩盖真 bug
+
+自检里 loop 用例曾把 `JumpIfNot.CodeOffset` 写成 `20`，而整个合成函数的偏移表只到 `17`——
+真实字节码不会出现这种越界落点。结果「目标越界就放弃结构化」这条正确规则反而让测试挂了。
+**合成测试的偏移必须和 `Measure` 的尺寸表算出来的一致**，否则测的是幻觉。
+
 ## 十一、下一步（按收益排序）
 
-### 1. 修结构还原的落点判定（可读性）
+### 1. 剩下 7 个状态机函数的嵌套还原
 
-`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 字节已一致，但结构化模式仍打印
-`[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，回编译 4249 vs 4195，退化成扁平。
-
-已知：`target=15` 在全函数偏移表里是第 2 条（`offset[2]=15`），而 `exit` 却是 **0**——
-说明这次 `BuildBlock` 拿到的 `offsets` 不是全函数的那张表（`offsets[0]` 已经 ≥ 15）。
-推断是嵌套 `Decompile` 的 `baseOffset` 与 `start` 下标不在同一坐标系里（待验证）。
-`IndexOfOffset` 返回 0 后 `exit <= start` 判无效，整个 if 结构丢失。
-
-排查顺序：在 `BuildBlock` 打 `offsets[0] / baseOffset / start / exit`，
-确认嵌套切片的 `start` 是「切片内下标」还是「全函数下标」；两者混用是这个 bug 的根源。
+`ExecuteUbergraph_*` 这类函数用「Push/Pop 执行流 + 共享尾部」组织代码，线性配对规则表达不了。
+可行方向：先按跳转目标建基本块图（探针的「基本块」段已有现成代码），
+在块图上做支配关系分析，再把有唯一支配者的块合成 if/loop。
+不要继续加节点类型——类型已经够用，缺的是控制流分析。
 
 ### 2. `EX_SwitchValue` 结构化还原（提升可读性）
 
@@ -295,14 +349,22 @@ public KismetExpression DefaultTerm;
 
 「8 连 `JumpIfNot` + 集中 case 体」的模式，可识别成 `SwitchNode`。需要按跳转目标建基本块图（探针已有基本块分析代码可参考）。
 
-### 4. 扩大测试样本
+### 4. 扩大到 `Blueprints/Cards`
 
-当前只测了 `Blueprints/Logic` 下 6 个资产（131 个函数全部通过）。建议扩展到：
+`Blueprints/Logic` 全部 28 个资产（1305 个函数）已全部通过。下一个战场是
+`Blueprints/Cards` 下的卡牌蓝图（2,000+ 个，含 `LetValueOnPersistentFrame` 等特殊形态）：
 
-- `Blueprints/Logic` 全部 28 个资产 → `.\tools\coverage.ps1 ... -Assets *`
-- `Blueprints/Cards` 下的卡牌蓝图（2,000+ 个，含 `LetValueOnPersistentFrame` 等特殊形态）
+```powershell
+.\tools\coverage.ps1 -AssetDir <Cards 目录> -Usmap <usmap> -Assets *
+```
 
-跑法见第七节。
+按经验，每扩一次样本都会掉出一批缺失指令——上一轮 28 资产就暴露出 8 类
+（`MetaCast`/`ClassContext`/`DefaultVariable`/`ArrayGetByRef`/`UnicodeStringConst`/
+`InstanceDelegate`/`TransformConst`/`MapConst`）。诊断流程：
+
+1. `coverage.ps1` 拿到失败清单
+2. 对每个失败跑探针，看是 `异常: 表达式 XXX 暂不支持` 还是 `✗ 字段不同`
+3. 前者补 `ToArg`/`ToExpr` 分支，后者先看 `StructuralDiff` 的标量比对
 
 ## 十二、相关仓库
 

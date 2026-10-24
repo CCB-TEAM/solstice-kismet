@@ -36,7 +36,7 @@
 | `0x1E` | `EX_FloatConst` | float32 | 单精度 | `float` 字面量 | 结构化 |
 | `0x37` | `EX_DoubleConst` | float64 | 双精度 | `double` 字面量 | 结构化 |
 | `0x1F` | `EX_StringConst` | ANSI 零结尾串 | ANSI 字符串 | `FString` 字面量 | 结构化 |
-| `0x34` | `EX_UnicodeStringConst` | UTF-16 零结尾串 | 宽字符串 | 含非 ASCII 的字面量 | — |
+| `0x34` | `EX_UnicodeStringConst` | UTF-16 零结尾串 | 宽字符串 | 含非 ASCII 的字面量 | 结构化 |
 | `0x21` | `EX_NameConst` | FName（int32 索引 + int32 编号） | 名字常量 | `FName` 字面量、`SwitchName` 的 case 值 | 结构化 |
 | `0x29` | `EX_TextConst` | FScriptText（byte 类型 + 变体载荷） | 本地化文本 | `FText` 字面量 / `NSLOCTEXT` | 结构化 |
 | `0x20` | `EX_ObjectConst` | FPackageIndex int32 | 对象引用 | 硬引用资源、类引用 | 结构化 |
@@ -46,7 +46,7 @@
 | `0x23` | `EX_VectorConst` | 3×float（LWC 下 3×double） | 向量 | `MakeVector` / 向量字面量 | 结构化 |
 | `0x41` | `EX_Vector3fConst` | 3×float（固定单精度） | 单精度向量 | UE5 LWC 之后的小向量特化 | — |
 | `0x22` | `EX_RotationConst` | 3×float（LWC 下 3×double） | 旋转 | `MakeRotator` | 结构化 |
-| `0x2B` | `EX_TransformConst` | FTransform | 变换 | `MakeTransform` | — |
+| `0x2B` | `EX_TransformConst` | FTransform | 变换 | `MakeTransform` | 结构化 |
 | `0x17` | `EX_Self` | 无 | `this` | 成员访问 / 自身调用 | 结构化 |
 | `0x5B` | `EX_SkipOffsetConst` | uint32 | 跳过量常量 | 配合 `EX_Skip` | 结构化 |
 | `0x33` | `EX_PropertyConst` | 指针 | `FProperty*` 常量 | 反射类节点（`GetProperty`） | — |
@@ -61,7 +61,7 @@
 |---|---|---|---|---|
 | `0x00` | `EX_LocalVariable` | 读函数局部变量 | 函数内的临时变量存储、循环计数器 | 结构化 |
 | `0x01` | `EX_InstanceVariable` | 读本对象成员 | `Set 成员 = ...` 的目标 | 结构化 |
-| `0x02` | `EX_DefaultVariable` | 读类默认对象（CDO）上的默认值 | 构造默认值、`GetDefaultObject` | — |
+| `0x02` | `EX_DefaultVariable` | 读类默认对象（CDO）上的默认值 | 构造默认值、`GetDefaultObject` | 结构化 |
 | `0x48` | `EX_LocalOutVariable` | 读**输出参数**（按引用传入） | 带 out 参数的函数内部写入 | 结构化 |
 | `0x6C` | `EX_ClassSparseDataVariable` | 稀疏类数据变量 | UE5 稀疏类数据 | — |
 
@@ -100,7 +100,7 @@
 | `0x63` | `EX_CallMulticastDelegate` | FPackageIndex + 委托表达式 + 参数表 | 调用多播委托 | `Call 事件分发器` | 结构化 |
 | `0x16` | `EX_EndFunctionParms` | 无 | 参数表终止符 | 每条调用后面都有 | 结构化（隐式） |
 | `0x15` | `EX_EndParmValue` | 无 | 可选参数默认值结束 | 带默认值的可选参数 | — |
-| `0x4B` | `EX_InstanceDelegate` | FName | 引用函数/委托实例 | `CreateEvent` 的结果 | — |
+| `0x4B` | `EX_InstanceDelegate` | FName | 引用函数/委托实例 | `CreateEvent` 的结果 | 结构化 |
 
 ## 五、上下文与类型转换
 
@@ -110,11 +110,11 @@
 | token | 指令 | 操作数 | 语义 | 什么时候用它 | 本库 |
 |---|---|---|---|---|---|
 | `0x19` | `EX_Context` | 对象表达式 + uint32 `Offset` + 指针 + 上下文表达式 | 在对象上下文里执行内层 | `对象.函数(...)` / `对象.成员` | 结构化 |
-| `0x12` | `EX_ClassContext` | 同 `EX_Context` | 上下文是**类默认对象** | 访问 CDO 上的默认值 | — |
+| `0x12` | `EX_ClassContext` | 同 `EX_Context` | 上下文是**类默认对象** | 访问 CDO 上的默认值 | 结构化 |
 | `0x1A` | `EX_Context_FailSilent` | 同 `EX_Context` | 上下文为空时**静默跳过** | 只用于无返回值/无输出参数的函数 | — |
 | `0x51` | `EX_InterfaceContext` | 值表达式 | 接口变量上下文（包一层） | 通过接口变量调用方法 | 结构化 |
 | `0x2E` | `EX_DynamicCast` | FPackageIndex + 目标表达式 | 安全动态转换（产出 `bSuccess`） | `Cast To X` 节点 | 结构化 |
-| `0x13` | `EX_MetaCast` | FPackageIndex + 目标 | 元类（类引用）转换 | `Cast To Class` | — |
+| `0x13` | `EX_MetaCast` | FPackageIndex + 目标 | 元类（类引用）转换 | `Cast To Class` | 结构化 |
 | `0x52` | `EX_ObjToInterfaceCast` | FPackageIndex + 目标 | 对象 → 接口 | 把对象赋给接口变量 | 结构化 |
 | `0x54` | `EX_CrossInterfaceCast` | FPackageIndex + 目标 | 接口 → 另一接口 | 接口之间转换 | — |
 | `0x55` | `EX_InterfaceToObjCast` | FPackageIndex + 目标 | 接口 → 对象 | 接口转回对象 | — |
@@ -131,10 +131,10 @@
 | `0x04` | `EX_Return` | 返回表达式 | 函数返回 | 每个函数末尾 | 结构化 |
 | `0x06` | `EX_Jump` | uint32 偏移 | 无条件跳转 | if 的 then 结束、循环回边 | 结构化 |
 | `0x07` | `EX_JumpIfNot` | uint32 偏移 + 条件表达式 | 条件为假则跳 | if/while/for 的退出边 | 结构化 |
-| `0x4E` | `EX_ComputedJump` | 目标表达式 | 跳到**算出来的**地址 | 分发器：按整数跳到对应代码块 | Raw |
-| `0x4C` | `EX_PushExecutionFlow` | uint32 地址 | 把地址压执行流栈，**继续顺序执行** | 异步/延迟节点开始 | Raw |
-| `0x4D` | `EX_PopExecutionFlow` | 无 | 跳到栈顶地址 | 异步节点恢复 | Raw |
-| `0x4F` | `EX_PopExecutionFlowIfNot` | 条件表达式 | 条件不成立才跳栈顶 | `Delay` 等待、`IsFaderActive` 轮询 | Raw |
+| `0x4E` | `EX_ComputedJump` | 目标表达式 | 跳到**算出来的**地址 | 分发器：按整数跳到对应代码块 | 结构化 |
+| `0x4C` | `EX_PushExecutionFlow` | uint32 地址 | 把地址压执行流栈，**继续顺序执行** | 异步/延迟节点开始 | 结构化 |
+| `0x4D` | `EX_PopExecutionFlow` | 无 | 跳到栈顶地址 | 异步节点恢复 | 结构化 |
+| `0x4F` | `EX_PopExecutionFlowIfNot` | 条件表达式 | 条件不成立才跳栈顶 | `Delay` 等待、`IsFaderActive` 轮询 | 结构化 |
 | `0x18` | `EX_Skip` | uint32 偏移 + 表达式 | 条件性跳过一段 | 编辑器调试 / 延迟求值 | — |
 | `0x69` | `EX_SwitchValue` | uint16 分支数 + uint32 `EndGotoOffset` + 索引表达式 + 每个分支（终值、uint32 `NextOffset`、case 体）+ 默认体 | switch 跳转表 | `Switch on Int` 节点 | Raw |
 | `0x0B` | `EX_Nothing` | 无 | 空操作 / 占位 | 编译器的跳转落点占位 | 结构化 |
@@ -155,15 +155,15 @@
 | `0x66` | `EX_EndArrayConst` | 无 | 数组字面量结束 | 结构化 |
 | `0x3D` | `EX_SetConst` | 指针 + int32 + 元素…`0x3E` | Set 字面量 | — |
 | `0x3E` | `EX_EndSetConst` | 无 | Set 字面量结束 | — |
-| `0x3F` | `EX_MapConst` | 两个指针 + int32 + 元素…`0x40` | Map 字面量 | — |
-| `0x40` | `EX_EndMapConst` | 无 | Map 字面量结束 | — |
-| `0x31` | `EX_SetArray` | 目标表达式 + FPackageIndex + 元素…`0x32` | **给数组赋值** | Raw |
-| `0x32` | `EX_EndArray` | 无 | 数组赋值结束 | Raw |
+| `0x3F` | `EX_MapConst` | 两个指针 + int32 + 元素…`0x40` | Map 字面量 | 结构化 |
+| `0x40` | `EX_EndMapConst` | 无 | Map 字面量结束 | 结构化 |
+| `0x31` | `EX_SetArray` | 目标表达式 + FPackageIndex + 元素…`0x32` | **给数组赋值** | 结构化 |
+| `0x32` | `EX_EndArray` | 无 | 数组赋值结束 | 结构化 |
 | `0x39` | `EX_SetSet` | 表达式 + int32 + 元素…`0x3A` | 给 Set 赋值 | — |
 | `0x3A` | `EX_EndSet` | 无 | Set 赋值结束 | — |
 | `0x3B` | `EX_SetMap` | 表达式 + int32 + 元素…`0x3C` | 给 Map 赋值 | — |
 | `0x3C` | `EX_EndMap` | 无 | Map 赋值结束 | — |
-| `0x6B` | `EX_ArrayGetByRef` | 数组表达式 + 索引表达式 | 按引用取数组元素 | — |
+| `0x6B` | `EX_ArrayGetByRef` | 数组表达式 + 索引表达式 | 按引用取数组元素 | 结构化 |
 
 `EX_ArrayConst` 是**字面量**（数组本身作为常量），`EX_SetArray` 是**赋值动作**
 （把元素写进已有的数组变量）——实测 `EX_SetArray` 在样本里出现 8 次，是最常见的未结构化指令。
@@ -264,16 +264,22 @@
 
 ## 十二、本库覆盖度汇总
 
-- **结构化（可读可改）**：常量、变量、`Let` 家族、六种调用形态、`Context` /
-  `InterfaceContext`、`DynamicCast` / `ObjToInterfaceCast` / `PrimitiveCast`、
-  `StructMemberContext`、`StructConst` / `ArrayConst`、`Jump` / `JumpIfNot` / `Return` /
-  `Nothing` / `EndOfScript`
-- **Raw 原样保留（字节安全，不可读）**：`EX_SwitchValue`、`EX_ComputedJump`、
-  `EX_PushExecutionFlow` / `EX_PopExecutionFlow` / `EX_PopExecutionFlowIfNot`、
-  `EX_SetArray`、`EX_BindDelegate`、`EX_AddMulticastDelegate` / `EX_RemoveMulticastDelegate`
-- **未覆盖**：其余（`SetSet` / `SetMap`、`MetaCast`、`ClassContext`、`Context_FailSilent`、
-  `DefaultVariable`、`EndParmValue`、`Skip`、`Assert`、`TransformConst`、`IntConstByte`、
-  各 `End*` 之外的容器指令、调试类、AutoRTFM）
+- **结构化（可读可改）**：常量（含 `Int64` / `Transform` / `UnicodeString`）、变量（含
+  `EX_DefaultVariable`）、`Let` 家族、六种调用形态 + `EX_InstanceDelegate`、`Context` /
+  `ClassContext` / `InterfaceContext`、`DynamicCast` / `MetaCast` / `ObjToInterfaceCast` /
+  `PrimitiveCast`、`StructMemberContext`、`StructConst` / `ArrayConst` / `SetArray` / `MapConst`、
+  `ArrayGetByRef`、`Jump` / `JumpIfNot` / `ComputedJump` / `PushExecutionFlow` /
+  `PopExecutionFlow` / `PopExecutionFlowIfNot` / `Return` / `Nothing` / `EndOfScript`
+- **Raw 原样保留（字节安全，不可读）**：`EX_SwitchValue`、`EX_BindDelegate`、
+  `EX_AddMulticastDelegate` / `EX_RemoveMulticastDelegate`、`EX_Context_FailSilent`（少见），
+  以及**跳过片段边界**的 `EX_JumpIfNot`（目标落在更外层代码里，见下）
+- **未覆盖**：其余（`SetSet` / `SetMap`、`ClassSparseDataVariable`、`EndParmValue`、`Skip`、
+  `Assert`、`IntConstByte`、`SoftObjectConst`、`PropertyConst`、`FieldPathConst`、
+  `Vector3fConst`、调试类、AutoRTFM）
+
+结构还原有一条重要边界：`EX_JumpIfNot` 的落点如果**越出当前片段**（共享尾部 / 状态机），
+反编译器会放弃把这一条还原成 `IfNode`，改为原样保留。硬猜写成 if 会让跳转偏移错位，
+而这恰恰是字节不一致的主要来源——先例见 HANDOVER 第十节。
 
 未覆盖不等于坏：出现在顶层会退化成 Raw（字节仍然一致）。失败边界更细一点：
 
@@ -281,5 +287,5 @@
 - 嵌套在**其他位置**（如 `EX_Context.ObjectExpression`）→ 可能退化，但
   `DecompileVerified` 会把回编译结果与原始字节比对，不符就整体退回扁平模式
 
-所以最终产出的字节永远是安全的，代价只是可读性。这条边界正是 131/131 逐字节一致的原因——
+所以最终产出的字节永远是安全的，代价只是可读性。这条边界正是 **1305/1305** 逐字节一致的原因——
 宁可退化，也不猜。
