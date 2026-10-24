@@ -179,6 +179,18 @@ public static class KismetCompiler
                 case NoObjectArg:
                     return new EX_NoObject();
 
+                case ContextMemberArg cm:
+                {
+                    var member = new EX_InstanceVariable { Variable = cm.Pointer };
+                    return new EX_Context
+                    {
+                        ObjectExpression = ToExpr(cm.Object),
+                        ContextExpression = member,
+                        RValuePointer = cm.Pointer,
+                        Offset = measure?.Invoke(member) ?? 0
+                    };
+                }
+
                 case DoubleArg d:
                     return new EX_DoubleConst { Value = d.Value };
 

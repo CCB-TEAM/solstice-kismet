@@ -362,7 +362,7 @@ public static class KismetDecompiler
     /// 把 EX_Context 还原成可嵌套的实参：外层恒为 Context，
     /// 内层指令的形态放在 InnerShape（它不一定是 FinalFunction）。
     /// </summary>
-    private static CallArg? ContextArg(EX_Context ctx, DecompileOptions options)
+    private static KArg? ContextArg(EX_Context ctx, DecompileOptions options)
     {
         var objName = TargetName(ctx.ObjectExpression);
         var objArg = ToArg(ctx.ObjectExpression, options);
@@ -390,6 +390,10 @@ public static class KismetDecompiler
                     ToArgs(f.Parameters, options),
                     CallShape.Context, objName, f.StackNode, objArg, ctx.RValuePointer, inner);
             }
+
+            case EX_InstanceVariable iv:
+                // 跨对象读成员：ContextExpression 是变量而不是调用
+                return new ContextMemberArg(objArg ?? new NoObjectArg(), TargetName(iv), iv.Variable!);
 
             default:
                 options.Warn?.Invoke($"ContextExpression 类型 {ctx.ContextExpression?.Inst} 未处理");

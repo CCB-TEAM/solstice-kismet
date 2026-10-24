@@ -98,6 +98,13 @@ public sealed record FloatArg(float Value) : KArg(PinType.Float);
 public sealed record StructConstArg(FPackageIndex Struct, int Size, IReadOnlyList<KArg> Values)
     : KArg(PinType.Struct);
 
+/// <summary>
+/// 跨对象读成员，对应 EX_Context + EX_InstanceVariable。
+/// EX_Context 的 ContextExpression 不一定都是调用。
+/// </summary>
+public sealed record ContextMemberArg(KArg Object, string Member, KismetPropertyPointer Pointer)
+    : KArg(PinType.Object);
+
 /// <summary>空对象字面量，对应 EX_NoObject。</summary>
 public sealed record NoObjectArg() : KArg(PinType.Object);
 
