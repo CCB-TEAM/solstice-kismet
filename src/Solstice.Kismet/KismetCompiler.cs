@@ -278,7 +278,9 @@ public static class KismetCompiler
                 }
 
                 default:
-                    return new EX_Nothing();
+                    // 不认识的参数类型必须报出来——静默变成 EX_Nothing 会让整条表达式退化，
+                    // 而且看不出是哪一步丢的。
+                    throw new InvalidOperationException($"参数类型 {arg.GetType().Name} 无法编译成表达式");
             }
         }
 
