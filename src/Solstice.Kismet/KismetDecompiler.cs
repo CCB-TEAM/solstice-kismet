@@ -266,14 +266,19 @@ public static class KismetDecompiler
 
         var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options);
 
-        // Jump 落在 exit 之前 → 中间是 else 分支
-        var elseBody = backTarget < exit && backTarget > jumpIndex
-            ? Decompile(Slice(expressions, jumpIndex + 1, exit), options)
+        // 结构的真正结束点是 Jump 的目标——它可能越过 JumpIfNot 的落点。
+        // 用 exit 当结束点会把中间那段代码整段丢掉。
+        var structureEnd = backTarget > jumpIndex && backTarget <= expressions.Count
+            ? backTarget
+            : exit;
+
+        var elseBody = structureEnd > jumpIndex + 1
+            ? Decompile(Slice(expressions, jumpIndex + 1, structureEnd), options)
             : null;
 
         var node = new IfNode(cond, thenBody, elseBody);
 
-        var next = exit;
+        var next = structureEnd;
         while (next < expressions.Count && expressions[next] is EX_Nothing)
         {
             next++;
