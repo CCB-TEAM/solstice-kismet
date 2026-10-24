@@ -183,7 +183,8 @@ public sealed record ContextCallNode(
     IReadOnlyList<KArg> Args,
     string? Owner = null,
     KArg? ObjectArg = null,
-    KismetPropertyPointer? RValuePointer = null)
+    KismetPropertyPointer? RValuePointer = null,
+        CallShape InnerShape = CallShape.Final)
     : KNode($"{ObjectVariable}.{Function}");
 
 /// <summary>

@@ -143,15 +143,18 @@ public static class KismetDecompiler
                     i++;
                     continue;
 
-                case EX_Context ctx when ctx.ContextExpression is EX_FinalFunction inner:
+                case EX_Context ctx:
                 {
-                    var name = options.ResolveImport?.Invoke(inner.StackNode) ?? $"<import {inner.StackNode?.Index}>";
-                    nodes.Add(new ContextCallNode(
-                        TargetName(ctx.ObjectExpression),
-                        name,
-                        ToArgs(inner.Parameters, options),
-                        ObjectArg: ToArg(ctx.ObjectExpression, options),
-                        RValuePointer: ctx.RValuePointer));
+                    var ctxNode = ContextNode(ctx, options);
+                    if (ctxNode is null)
+                    {
+                        nodes.Add(Raw(e));
+                    }
+                    else
+                    {
+                        nodes.Add(ctxNode);
+                    }
+
                     i++;
                     continue;
                 }
@@ -378,6 +381,39 @@ public static class KismetDecompiler
     {
         var path = pointer?.New?.Path;
         return path is { Length: > 0 } ? path[^1].ToString() : "?";
+    }
+
+    /// <summary>
+    /// 把 EX_Context 还原成 ContextCallNode。
+    /// ContextExpression 的形态决定 InnerShape——它不一定都是 EX_FinalFunction。
+    /// </summary>
+    private static ContextCallNode? ContextNode(EX_Context ctx, DecompileOptions options)
+    {
+        var objName = TargetName(ctx.ObjectExpression);
+        var objArg = ToArg(ctx.ObjectExpression, options);
+
+        switch (ctx.ContextExpression)
+        {
+            case EX_LocalVirtualFunction v:
+                return new ContextCallNode(
+                    objName, v.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(v.Parameters, options),
+                    ObjectArg: objArg, RValuePointer: ctx.RValuePointer, InnerShape: CallShape.Virtual);
+
+            case EX_FinalFunction f:
+            {
+                var shape = f is EX_CallMath ? CallShape.Math
+                          : f is EX_LocalFinalFunction ? CallShape.LocalFinal
+                          : CallShape.Final;
+
+                var name = options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>";
+                return new ContextCallNode(
+                    objName, name, ToArgs(f.Parameters, options),
+                    ObjectArg: objArg, RValuePointer: ctx.RValuePointer, InnerShape: shape);
+            }
+
+            default:
+                return null;
+        }
     }
 
     /// <summary>把变量表达式还原成指针参数，供回编译原样使用。</summary>

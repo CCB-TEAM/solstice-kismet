@@ -312,10 +312,20 @@ public static class KismetCompiler
                         throw new InvalidOperationException($"跨对象调用 {cc.Function} 缺少 RValuePointer");
                     }
 
-                    var inner = new EX_FinalFunction
+                    // ContextExpression 的形态由 InnerShape 决定，不一定都是 FinalFunction
+                    var ctxArgs = BuildArgs(new CallNode(cc.Function, cc.Args));
+                    var ctxStack = StackOf(cc.Function, null);
+
+                    KismetExpression inner = cc.InnerShape switch
                     {
-                        StackNode = StackOf(cc.Function, null),
-                        Parameters = BuildArgs(new CallNode(cc.Function, cc.Args))
+                        CallShape.Virtual when resolveName is not null => new EX_LocalVirtualFunction
+                        {
+                            VirtualFunctionName = resolveName(cc.Function),
+                            Parameters = ctxArgs
+                        },
+                        CallShape.Math => new EX_CallMath { StackNode = ctxStack, Parameters = ctxArgs },
+                        CallShape.LocalFinal => new EX_LocalFinalFunction { StackNode = ctxStack, Parameters = ctxArgs },
+                        _ => new EX_FinalFunction { StackNode = ctxStack, Parameters = ctxArgs }
                     };
 
                     result.Add(new EX_Context
