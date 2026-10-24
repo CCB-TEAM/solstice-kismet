@@ -196,9 +196,11 @@ public static class KismetDecompiler
             return null;
         }
 
-        // 体内最后一条应该是 EX_Jump
+        // 体内第一条 EX_Jump 才标志着 then 分支结束（正序找，不是倒序）：
+        //   Jump 落到 exit      → 没有 else
+        //   Jump 落到别处      → then 结束，[jumpIndex+1, exit) 是 else 分支
         var jumpIndex = -1;
-        for (var k = exit - 1; k > start; k--)
+        for (var k = start + 1; k < exit; k++)
         {
             if (expressions[k] is EX_Jump)
             {
@@ -207,8 +209,7 @@ public static class KismetDecompiler
             }
         }
 
-        // 体内末尾没有 EX_Jump → 这是「没有 else 的 if」：
-        // 条件 → JumpIfNot(结束) → 体内，落点之后直接继续。
+        // 没有 EX_Jump → 「没有 else 的 if」
         if (jumpIndex < 0)
         {
             var plainCond = ToArg(jumpIfNot.BooleanExpression, options)
@@ -227,20 +228,26 @@ public static class KismetDecompiler
 
         var jump = (EX_Jump)expressions[jumpIndex];
         var backTarget = IndexOfOffset(offsets, jump.CodeOffset);
-
-        var body = Decompile(Slice(expressions, start + 1, jumpIndex), options);
         var cond = ToArg(jumpIfNot.BooleanExpression, options)
                    ?? throw new InvalidOperationException(
                        $"分支条件表达式 {jumpIfNot.BooleanExpression?.Inst} 暂不支持");
 
-        // 回跳到起点之前 → 循环；否则 → 条件分支
-        var isLoop = backTarget >= 0 && backTarget <= start;
+        // 回跳到起点之前 → 循环
+        if (backTarget >= 0 && backTarget <= start)
+        {
+            var loopBody = Decompile(Slice(expressions, start + 1, jumpIndex), options);
+            return new Block(new LoopNode(cond, loopBody), exit);
+        }
 
-        KNode node = isLoop
-            ? new LoopNode(cond, body)
-            : new IfNode(cond, body);
+        var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options);
 
-        // 跳过退出落点处的占位
+        // Jump 落在 exit 之前 → 中间是 else 分支
+        var elseBody = backTarget < exit && backTarget > jumpIndex
+            ? Decompile(Slice(expressions, jumpIndex + 1, exit), options)
+            : null;
+
+        var node = new IfNode(cond, thenBody, elseBody);
+
         var next = exit;
         while (next < expressions.Count && expressions[next] is EX_Nothing)
         {

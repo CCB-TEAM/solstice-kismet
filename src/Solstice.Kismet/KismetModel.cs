@@ -172,7 +172,8 @@ public abstract record KNode(string Title);
 
 public sealed record CallNode(string Function, IReadOnlyList<KArg> Args, string? Owner = null, FPackageIndex? StackNode = null) : KNode(Function);
 
-public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then) : KNode("If");
+public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then, IReadOnlyList<KNode>? Else = null)
+    : KNode("If");
 
 public sealed record ReturnNode() : KNode("Return");
 

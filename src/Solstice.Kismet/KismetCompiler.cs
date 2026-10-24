@@ -374,9 +374,17 @@ public static class KismetCompiler
 
                     var j = new EX_Jump();
                     result.Add(j);
-                    var endIdx = result.Count;
 
-                    result.Add(new EX_Nothing()); // else 落点
+                    // else 落点（jn 跳到这里）；有 else 体就紧接着发射
+                    if (f.Else is { Count: > 0 } elseNodes)
+                    {
+                        foreach (var n in elseNodes)
+                        {
+                            EmitNode(n);
+                        }
+                    }
+
+                    var endIdx = result.Count;
                     result.Add(new EX_Nothing()); // end 落点
 
                     patches.Add((jn, elseIdx));
