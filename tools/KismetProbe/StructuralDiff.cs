@@ -1,6 +1,7 @@
 using System.Reflection;
 using UAssetAPI;
 using UAssetAPI.Kismet.Bytecode;
+using UAssetAPI.UnrealTypes;
 
 namespace KismetProbe;
 
@@ -69,6 +70,26 @@ public static class StructuralDiff
 
         foreach (var field in fields)
         {
+            if (field.FieldType != typeof(KismetExpression) && field.FieldType != typeof(KismetExpression[]))
+            {
+                // 标量字段（跳转偏移、Context.Offset、指针、包索引、常量值）也要比。
+                // 漏掉它们会出现「结构完全一致」但字节不同这种最难查的情况。
+                if (field.Name is "Tag" or "RawValue")
+                {
+                    continue;
+                }
+
+                var va = field.GetValue(a);
+                var vb = field.GetValue(b);
+                if (!ScalarEquals(va, vb))
+                {
+                    Console.WriteLine($"{pad}✗ [{path}.{field.Name}] 取值不同：{Render(va)} vs {Render(vb)}");
+                    ok = false;
+                }
+
+                continue;
+            }
+
             if (field.FieldType == typeof(KismetExpression))
             {
                 var ca = field.GetValue(a) as KismetExpression;
@@ -104,6 +125,54 @@ public static class StructuralDiff
         }
 
         return ok;
+    }
+
+    private static bool ScalarEquals(object? x, object? y) => (x, y) switch
+    {
+        (null, null) => true,
+        (null, _) or (_, null) => false,
+        (FPackageIndex i1, FPackageIndex i2) => i1.Index == i2.Index,
+        (KismetPropertyPointer p1, KismetPropertyPointer p2) => RenderPointer(p1) == RenderPointer(p2),
+        _ => x.Equals(y)
+    };
+
+    private static string Render(object? value)
+    {
+        if (value is null)
+        {
+            return "null";
+        }
+
+        if (value is KismetPropertyPointer pointer)
+        {
+            return RenderPointer(pointer);
+        }
+
+        if (value is FPackageIndex index)
+        {
+            return index.Index.ToString();
+        }
+
+        if (value is float f)
+        {
+            return f.ToString("R");
+        }
+
+        if (value is double d)
+        {
+            return d.ToString("R");
+        }
+
+        return value.ToString() ?? "?";
+    }
+
+    /// <summary>不依赖资产上下文，把属性指针渲染成可比对的字符串。</summary>
+    private static string RenderPointer(KismetPropertyPointer pointer)
+    {
+        var path = pointer.New?.Path;
+        var names = path is null ? "" : string.Join(".", path.Select(p => p.ToString()));
+        var owner = pointer.New?.ResolvedOwner?.Index ?? pointer.Old?.Index ?? 0;
+        return $"{names}@{owner}";
     }
 
     private static void Dump(KismetExpression e, UAsset asset, string prefix)

@@ -168,6 +168,39 @@ Console.WriteLine($"  逐字节一致: {same}");
 
 if (!same)
 {
+    // 定位第一个不同的字节，并指出它落在哪条指令上。
+    // 结构对比说「完全一致」却字迹不同时，差异十有八九藏在跳转偏移 / EX_Context.Offset 这类数值字段里。
+    var limit = Math.Min(originalBytes.Length, regeneratedBytes.Length);
+    var firstDiff = -1;
+    for (var i = 0; i < limit; i++)
+    {
+        if (originalBytes[i] != regeneratedBytes[i])
+        {
+            firstDiff = i;
+            break;
+        }
+    }
+
+    Console.WriteLine(firstDiff < 0
+        ? "  首个差异：长度不同（前缀全部相同）"
+        : $"  首个不同字节: {firstDiff}（原始 0x{originalBytes[firstDiff]:X2} / 回编译 0x{regeneratedBytes[firstDiff]:X2}）");
+
+    if (firstDiff >= 0)
+    {
+        uint walk = 0;
+        for (var i = 0; i < bytecode.Length; i++)
+        {
+            var size = bytecode[i].GetSize(asset);
+            if (firstDiff >= walk && firstDiff < walk + size)
+            {
+                Console.WriteLine($"  落在第 {i} 条 {bytecode[i].Inst}（off={walk}, size={size}）");
+                break;
+            }
+
+            walk += size;
+        }
+    }
+
     KismetProbe.StructuralDiff.Report(bytecode, regenerated, asset);
 }
 
@@ -189,18 +222,46 @@ static byte[] Serialize(IReadOnlyList<KismetExpression> expressions, UAsset asse
 static string Describe(KNode node, int depth)
 {
     var pad = new string(' ', depth * 2);
-    return node switch
+    switch (node)
     {
-        AssignNode a => $"{pad}Set {a.VariableName} = {Arg(a.Value)}",
-        AssignBoolNode b => $"{pad}Set {b.VariableName} = {Arg(b.Value)}",
-        CallNode c => $"{pad}Call {c.Function}({string.Join(", ", c.Args.Select(Arg))})",
-        ContextCallNode cc => $"{pad}{cc.ObjectVariable}.{cc.Function}({string.Join(", ", cc.Args.Select(Arg))})",
-        VirtualCallNode v => $"{pad}Virtual {v.Function}({string.Join(", ", v.Args.Select(Arg))})",
-        IfNode f => $"{pad}If ({Arg(f.Condition)})\n" + string.Join("\n", f.Then.Select(n => Describe(n, depth + 1))),
-        LoopNode l => $"{pad}Loop ({Arg(l.Condition)})\n" + string.Join("\n", l.Body.Select(n => Describe(n, depth + 1))),
-        ReturnNode => $"{pad}Return",
-        _ => $"{pad}{node.Title}"
-    };
+        case AssignNode a:
+            return $"{pad}Set {a.VariableName} = {Arg(a.Value)}";
+        case AssignBoolNode b:
+            return $"{pad}Set {b.VariableName} = {Arg(b.Value)}";
+        case CallNode c:
+            return $"{pad}Call {c.Function}({string.Join(", ", c.Args.Select(Arg))})";
+        case ContextCallNode cc:
+            return $"{pad}{cc.ObjectVariable}.{cc.Function}({string.Join(", ", cc.Args.Select(Arg))})";
+        case VirtualCallNode v:
+            return $"{pad}Virtual {v.Function}({string.Join(", ", v.Args.Select(Arg))})";
+        case MathCallNode m:
+            return $"{pad}Math {m.Function}({string.Join(", ", m.Args.Select(Arg))})";
+        case LocalFinalCallNode lf:
+            return $"{pad}LocalFinal {lf.Function}({string.Join(", ", lf.Args.Select(Arg))})";
+        case MulticastCallNode mc:
+            return $"{pad}Multicast {mc.Function}({string.Join(", ", mc.Args.Select(Arg))})";
+        case PersistentAssignNode pa:
+            return $"{pad}SetPersistent {pa.Name} = {Arg(pa.Value)}";
+        case IfNode f:
+        {
+            var head = $"{pad}If ({Arg(f.Condition)})";
+            var body = string.Join("\n", f.Then.Select(n => Describe(n, depth + 1)));
+            if (f.Else is not { Count: > 0 } els)
+            {
+                return head + (body.Length > 0 ? "\n" + body : "");
+            }
+
+            var elseBody = string.Join("\n", els.Select(n => Describe(n, depth + 1)));
+            return $"{head}\n{body}\n{pad}Else\n{elseBody}";
+        }
+
+        case LoopNode l:
+            return $"{pad}Loop ({Arg(l.Condition)})\n" + string.Join("\n", l.Body.Select(n => Describe(n, depth + 1)));
+        case ReturnNode r:
+            return r.Value is null ? $"{pad}Return" : $"{pad}Return {Arg(r.Value)}";
+        default:
+            return $"{pad}{node.Title}";
+    }
 }
 
 static string Arg(KArg a) => a switch
@@ -210,5 +271,20 @@ static string Arg(KArg a) => a switch
     PointerArg p => p.Name,
     LocalArg l => l.Name,
     CallArg c => $"{c.Function}(...)",
+    ObjectArg o => $"<obj {o.Value.Index}>",
+    NoObjectArg => "none",
+    SelfArg => "this",
+    StringArg s => $"\"{s.Value}\"",
+    NameArg n => n.Value.ToString(),
+    TextArg => "text",
+    ArrayConstArg ac => $"[{ac.Elements.Count}]",
+    StructConstArg sc => $"{{{sc.Values.Count}}}",
+    StructMemberArg sm => $"{Arg(sm.Struct)}.{sm.Name}",
+    ContextMemberArg cm => $"{Arg(cm.Object)}.{cm.Member}",
+    InterfaceContextArg ic => $"interface {Arg(ic.Value)}",
+    InterfaceCastArg cast => $"iface<{cast.ClassPtr.Index}>({Arg(cast.Target)})",
+    DynamicCastArg dc => $"cast<{dc.ClassPtr.Index}>({Arg(dc.Target)})",
+    PrimitiveCastArg pc => $"({pc.Conversion}){Arg(pc.Target)}",
+    RawArg ra => $"<{ra.Expression.Inst}>",
     _ => "?"
 };
