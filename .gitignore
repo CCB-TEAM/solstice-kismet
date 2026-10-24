@@ -4,10 +4,11 @@ obj/
 .vs/
 
 
-.sample-work/
+.sample-work*/
 *.sample-work-re/
 
 .git-commit-msg.txt
 
 .msg.tmp
 .msg.tmp.txt
+.sample-work*/
