@@ -126,7 +126,8 @@ public sealed record CallArg(
     CallShape Shape,
     string? ObjectVariable = null,
     FPackageIndex? StackNode = null,
-    KArg? ObjectArg = null)
+    KArg? ObjectArg = null,
+    KismetPropertyPointer? RValuePointer = null)
     : KArg(PinType.Object);
 
 /// <summary>节点（编辑器层的逻辑单元，一行一个）。</summary>
@@ -155,7 +156,8 @@ public sealed record ContextCallNode(
     string Function,
     IReadOnlyList<KArg> Args,
     string? Owner = null,
-    KArg? ObjectArg = null)
+    KArg? ObjectArg = null,
+    KismetPropertyPointer? RValuePointer = null)
     : KNode($"{ObjectVariable}.{Function}");
 
 /// <summary>

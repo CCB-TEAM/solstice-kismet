@@ -208,9 +208,12 @@ public static class KismetCompiler
                                 ? found
                                 : null;
 
-                        // UE 里 RValueProperty 允许为 nullptr（Statement.LHS 为空时），
-                        // 序列化成索引 0。所以这里用零指针而不是放弃构造。
-                        objPtr ??= new KismetPropertyPointer(new FPackageIndex(0));
+                        // 优先用反编译保留的原始指针；没有就按变量名查
+                        objPtr = c.RValuePointer ?? objPtr;
+                        if (objPtr is null)
+                        {
+                            return final;
+                        }
 
                         return new EX_Context
                         {
@@ -269,8 +272,12 @@ public static class KismetCompiler
                         ? pa.Pointer
                         : variables is not null && variables.TryGetValue(cc.ObjectVariable, out var found) ? found : null;
 
-                    // 同上：对象为字面量时没有属性指针，用零指针
-                    objPtr ??= new KismetPropertyPointer(new FPackageIndex(0));
+                    // 优先用反编译保留的原始指针
+                    objPtr = cc.RValuePointer ?? objPtr;
+                    if (objPtr is null)
+                    {
+                        throw new InvalidOperationException($"跨对象调用 {cc.Function} 缺少 RValuePointer");
+                    }
 
                     var inner = new EX_FinalFunction
                     {

@@ -150,7 +150,8 @@ public static class KismetDecompiler
                         TargetName(ctx.ObjectExpression),
                         name,
                         ToArgs(inner.Parameters, options),
-                        ObjectArg: ToArg(ctx.ObjectExpression, options)));
+                        ObjectArg: ToArg(ctx.ObjectExpression, options),
+                        RValuePointer: ctx.RValuePointer));
                     i++;
                     continue;
                 }
@@ -324,7 +325,8 @@ public static class KismetDecompiler
             CallShape.Context,
             TargetName(ctx.ObjectExpression),
             inner.StackNode,
-            ToArg(ctx.ObjectExpression, options)),
+            ToArg(ctx.ObjectExpression, options),
+            ctx.RValuePointer),
         _ => null
     };
 
