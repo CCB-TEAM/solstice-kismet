@@ -488,12 +488,19 @@ public static class KismetCompiler
 
                 case AssignBoolNode ab:
                 {
+                    // 目标可以是变量（有指针），也可以是结构体成员 / 跨对象成员这类表达式
                     var pointer = ab.TargetPointer?.Pointer
+                        ?? (ab.TargetArg as StructMemberArg)?.Member
+                        ?? (ab.TargetArg as ContextMemberArg)?.Pointer
                         ?? (variables is not null && variables.TryGetValue(ab.VariableName, out var bp) ? bp : null);
-                    if (pointer is null) { throw new InvalidOperationException($"布尔赋值目标 {ab.VariableName} 没有可用的属性指针"); }
+
+                    KismetExpression varExpr = ab.TargetArg is { } bta
+                        ? ToExpr(bta)
+                        : pointer is not null
+                            ? TargetExpr(ab.TargetPointer, pointer)
+                            : throw new InvalidOperationException($"布尔赋值目标 {ab.VariableName} 无法构造");
 
                     // EX_LetBase 家族：变量用表达式表示（不像 EX_Let 还要单独的 Value 指针）
-                    KismetExpression varExpr = TargetExpr(ab.TargetPointer, pointer);
                     KismetExpression value = ToExpr(ab.Value);
 
                     KismetExpression assign = ab.Kind switch

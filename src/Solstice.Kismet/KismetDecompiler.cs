@@ -546,7 +546,7 @@ public static class KismetDecompiler
         var target = TargetName(variable);
         // 赋值源可能是字面量，也可能是一次读变量/调用，必须原样保留
         var value = ToArg(assignment, options) ?? new BoolArg(false);
-        return new AssignBoolNode(target, value, PointerOf(variable), kind);
+        return new AssignBoolNode(target, value, PointerOf(variable), kind, ToArg(variable, options));
     }
 
     /// <summary>属性指针的名字（FFieldPath 最后一段）。</summary>

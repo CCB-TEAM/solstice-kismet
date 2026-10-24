@@ -272,7 +272,8 @@ public sealed record AssignBoolNode(
     string VariableName,
     KArg Value,
     PointerArg? TargetPointer = null,
-    AssignKind Kind = AssignKind.LetBool)
+    AssignKind Kind = AssignKind.LetBool,
+    KArg? TargetArg = null)
     : KNode($"Set {VariableName}");
 
 /// <summary>写持久帧上的变量，编译成 EX_LetValueOnPersistentFrame。</summary>
