@@ -175,7 +175,11 @@ public static class KismetDecompiler
         return nodes;
     }
 
-    private sealed record RawNode(KismetExpression Expression) : KNode($"<{Expression.Inst}>");
+    /// <summary>
+    /// 未识别/未归类的表达式。回编译时**原样发回去**——
+    /// 丢掉会让后面所有指令错位，比保留更糟。
+    /// </summary>
+    public sealed record RawNode(KismetExpression Expression) : KNode($"<{Expression.Inst}>");
 
     private static RawNode Raw(KismetExpression e) => new(e);
 

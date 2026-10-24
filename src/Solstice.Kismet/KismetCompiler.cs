@@ -482,9 +482,14 @@ public static class KismetCompiler
                     });
                     break;
 
-                case ReturnNode:
-                    result.Add(new EX_Return { ReturnExpression = new EX_Nothing() });
+                case KismetDecompiler.RawNode raw:
+                    // 未归类的表达式（如孤立的 EX_Jump）原样发回去，
+                    // 丢掉会让后面所有指令错位。
+                    result.Add(raw.Expression);
                     break;
+
+                case ReturnNode:
+                    result.Add(new EX_Return { ReturnExpression = new EX_Nothing() });                    break;
             }
         }
 
