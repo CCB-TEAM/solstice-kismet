@@ -209,6 +209,13 @@ public static class KismetCompiler
                 case RotationArg r:
                     return new EX_RotationConst { Value = r.Value };
 
+                case DynamicCastArg dc:
+                    return new EX_DynamicCast
+                    {
+                        ClassPtr = dc.ClassPtr,
+                        Target = ToExpr(dc.Target)
+                    };
+
                 case ArrayConstArg ac:
                     return new EX_ArrayConst
                     {
