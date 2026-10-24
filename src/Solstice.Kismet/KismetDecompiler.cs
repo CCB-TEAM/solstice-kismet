@@ -199,13 +199,29 @@ public static class KismetDecompiler
         // 体内第一条 EX_Jump 才标志着 then 分支结束（正序找，不是倒序）：
         //   Jump 落到 exit      → 没有 else
         //   Jump 落到别处      → then 结束，[jumpIndex+1, exit) 是 else 分支
+        // 找与这条 JumpIfNot 配对的 EX_Jump：
+        //   跳过整个 else 区间（目标 >= exit）的 → then 分支的结束跳转
+        //   跳回起点之前的 → 循环回跳
+        // 不能随便取第一条——体内可能还有别的跳转。
         var jumpIndex = -1;
         for (var k = start + 1; k < exit; k++)
         {
-            if (expressions[k] is EX_Jump)
+            if (expressions[k] is not EX_Jump jj)
+            {
+                continue;
+            }
+
+            var target = IndexOfOffset(offsets, jj.CodeOffset);
+
+            if (target >= exit)
             {
                 jumpIndex = k;
                 break;
+            }
+
+            if (jumpIndex < 0 && target >= 0 && target <= start)
+            {
+                jumpIndex = k;
             }
         }
 
