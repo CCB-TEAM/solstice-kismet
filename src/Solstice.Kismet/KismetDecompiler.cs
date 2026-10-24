@@ -293,7 +293,7 @@ public static class KismetDecompiler
                             ?? throw new InvalidOperationException(
                                 $"分支条件表达式 {jumpIfNot.BooleanExpression?.Inst} 暂不支持");
 
-            var plainBody = Decompile(Slice(expressions, start + 1, exit), options, offsets[start + 1]);
+            var plainBody = Decompile(Slice(expressions, start + 1, exit), options, OffAt(offsets, start + 1));
             var plainNext = exit;
             while (plainNext < expressions.Count && expressions[plainNext] is EX_Nothing)
             {
@@ -312,11 +312,11 @@ public static class KismetDecompiler
         // 回跳到起点之前 → 循环
         if (backTarget >= 0 && backTarget <= start)
         {
-            var loopBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, offsets[start + 1]);
+            var loopBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, OffAt(offsets, start + 1));
             return new Block(new LoopNode(cond, loopBody), exit);
         }
 
-        var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, offsets[start + 1]);
+        var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, OffAt(offsets, start + 1));
 
         // 结构的真正结束点是 Jump 的目标——它可能越过 JumpIfNot 的落点。
         // 用 exit 当结束点会把中间那段代码整段丢掉。
@@ -325,7 +325,7 @@ public static class KismetDecompiler
             : exit;
 
         var elseBody = structureEnd > jumpIndex + 1
-            ? Decompile(Slice(expressions, jumpIndex + 1, structureEnd), options, offsets[jumpIndex + 1])
+            ? Decompile(Slice(expressions, jumpIndex + 1, structureEnd), options, OffAt(offsets, jumpIndex + 1))
             : null;
 
         var node = new IfNode(cond, thenBody, elseBody);
@@ -379,6 +379,10 @@ public static class KismetDecompiler
     /// 而不是直接判失败，否则整个分支结构会丢失。
     /// </para>
     /// </summary>
+    /// <summary>越界安全的偏移取值（切片可能落在末尾）。</summary>
+    private static uint OffAt(uint[] offsets, int index)
+        => index >= 0 && index < offsets.Length ? offsets[index] : (offsets.Length > 0 ? offsets[^1] : 0);
+
     private static int IndexOfOffset(uint[] offsets, uint target)
     {
         for (var i = 0; i < offsets.Length; i++)
