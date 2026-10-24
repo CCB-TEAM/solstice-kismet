@@ -124,8 +124,20 @@ public static class KismetDecompiler
                     i++;
                     continue;
 
-                // 注意：EX_LocalFinalFunction / EX_CallMath 都继承自 EX_FinalFunction，
-                // 必须排在它之前，否则永远匹配不到。
+                // 注意：EX_LocalFinalFunction / EX_CallMath / EX_CallMulticastDelegate
+                // 都继承自 EX_FinalFunction，必须排在它之前，否则永远匹配不到。
+                case EX_CallMulticastDelegate mcd:
+                {
+                    var mcdName = options.ResolveImport?.Invoke(mcd.StackNode) ?? $"<import {mcd.StackNode?.Index}>";
+                    nodes.Add(new MulticastCallNode(
+                        mcdName,
+                        ToArgs(mcd.Parameters, options),
+                        ToArg(mcd.Delegate, options),
+                        mcd.StackNode));
+                    i++;
+                    continue;
+                }
+
                 case EX_LocalFinalFunction localFinal:
                 {
                     var lfName = options.ResolveImport?.Invoke(localFinal.StackNode) ?? $"<import {localFinal.StackNode?.Index}>";
@@ -429,6 +441,12 @@ public static class KismetDecompiler
         EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
         // 注意：EX_LocalFinalFunction / EX_CallMath 都继承自 EX_FinalFunction，
         // 必须排在 EX_FinalFunction 之前，否则永远匹配不到。
+        EX_CallMulticastDelegate mcd => new CallArg(
+            options.ResolveImport?.Invoke(mcd.StackNode) ?? $"<import {mcd.StackNode?.Index}>",
+            ToArgs(mcd.Parameters, options),
+            CallShape.MulticastDelegate,
+            StackNode: mcd.StackNode,
+            Delegate: ToArg(mcd.Delegate, options)),
         EX_LocalFinalFunction lf => new CallArg(
             options.ResolveImport?.Invoke(lf.StackNode) ?? $"<import {lf.StackNode?.Index}>",
             ToArgs(lf.Parameters, options),

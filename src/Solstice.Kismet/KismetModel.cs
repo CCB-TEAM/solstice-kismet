@@ -167,6 +167,9 @@ public enum CallShape
     /// <summary>EX_VirtualFunction：按 FName 调虚函数（非 Local 形态）。</summary>
     VirtualGlobal,
 
+    /// <summary>EX_CallMulticastDelegate：多播委托调用（继承自 EX_FinalFunction，多一个 Delegate）。</summary>
+    MulticastDelegate,
+
     /// <summary>EX_Context：实例函数，需要对象上下文。</summary>
     Context
 }
@@ -180,8 +183,17 @@ public sealed record CallArg(
     FPackageIndex? StackNode = null,
     KArg? ObjectArg = null,
     KismetPropertyPointer? RValuePointer = null,
-    CallShape InnerShape = CallShape.Final)
+    CallShape InnerShape = CallShape.Final,
+    KArg? Delegate = null)
     : KArg(PinType.Object);
+
+/// <summary>多播委托调用，编译成 EX_CallMulticastDelegate。</summary>
+public sealed record MulticastCallNode(
+    string Function,
+    IReadOnlyList<KArg> Args,
+    KArg? Delegate,
+    FPackageIndex? StackNode = null)
+    : KNode($"Multicast {Function}");
 
 /// <summary>节点（编辑器层的逻辑单元，一行一个）。</summary>
 public abstract record KNode(string Title);

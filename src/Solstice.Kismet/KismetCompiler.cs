@@ -261,6 +261,12 @@ public static class KismetCompiler
                             VirtualFunctionName = resolveName(c.Function),
                             Parameters = inner
                         },
+                        CallShape.MulticastDelegate => new EX_CallMulticastDelegate
+                        {
+                            StackNode = stack,
+                            Parameters = inner,
+                            Delegate = c.Delegate is { } dg ? ToExpr(dg) : new EX_Nothing()
+                        },
                         _ => new EX_FinalFunction { StackNode = stack, Parameters = inner }
                     };
 
@@ -434,6 +440,15 @@ public static class KismetCompiler
                     {
                         StackNode = StackOf(mc.Function, mc.StackNode),
                         Parameters = BuildArgs(new CallNode(mc.Function, mc.Args))
+                    });
+                    break;
+
+                case MulticastCallNode mcn:
+                    result.Add(new EX_CallMulticastDelegate
+                    {
+                        StackNode = StackOf(mcn.Function, mcn.StackNode),
+                        Parameters = BuildArgs(new CallNode(mcn.Function, mcn.Args)),
+                        Delegate = mcn.Delegate is { } md ? ToExpr(md) : new EX_Nothing()
                     });
                     break;
 
