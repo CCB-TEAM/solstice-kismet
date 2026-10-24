@@ -566,6 +566,7 @@ public static class KismetDecompiler
             RequireArg(arrayGet.ArrayVariable, options),
             RequireArg(arrayGet.ArrayIndex, options)),
         EX_UnicodeStringConst unicode => new UnicodeStringArg(unicode.Value),
+        EX_SoftObjectConst soft => new SoftObjectArg(RequireArg(soft.Value, options)),
         EX_InstanceDelegate instanceDelegate => new InstanceDelegateArg(instanceDelegate.FunctionName),
         EX_TransformConst transform => new TransformArg(transform.Value),
         EX_MapConst mapConst => new MapConstArg(

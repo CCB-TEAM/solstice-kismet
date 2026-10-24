@@ -321,5 +321,24 @@ var options = new DecompileOptions(Measure, ResolveImport);
     Check("ubergraph 烘焙: 尾声偏移", baked?.EpilogueOffset == 31, $"{baked?.EpilogueOffset}");
 }
 
+// ---- 11. EX_SoftObjectConst：软引用常量（载荷是表达式，不能压成字符串）----
+{
+    var exprs = new KismetExpression[]
+    {
+        new EX_Return
+        {
+            ReturnExpression = new EX_SoftObjectConst { Value = new EX_StringConst { Value = "/Game/Cards/A" } }
+        },
+        new EX_EndOfScript()
+    };
+
+    var nodes = KismetDecompiler.Decompile(exprs, options);
+    Check("软对象: 还原成节点", nodes[0] is ReturnNode { Value: SoftObjectArg });
+
+    var rebuilt = KismetCompiler.CompileToExpressions(nodes, CompileContext.Empty);
+    Check("软对象: 回编译保留载荷",
+        rebuilt[0] is EX_Return { ReturnExpression: EX_SoftObjectConst { Value: EX_StringConst } });
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;

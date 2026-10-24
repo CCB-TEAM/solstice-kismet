@@ -42,7 +42,7 @@
 | `0x20` | `EX_ObjectConst` | FPackageIndex int32 | 对象引用 | 硬引用资源、类引用 | 结构化 |
 | `0x2A` | `EX_NoObject` | 无 | 空对象 | `nullptr` 对象 / `Cast` 失败分支 | 结构化 |
 | `0x2D` | `EX_NoInterface` | 无 | 空接口 | 接口变量未设置 | — |
-| `0x67` | `EX_SoftObjectConst` | 内嵌表达式 | 软对象引用 | `SoftObjectPath` / 软引用字面量 | — |
+| `0x67` | `EX_SoftObjectConst` | 内嵌表达式 | 软对象引用 | `SoftObjectPath` / 软引用字面量 | 结构化 |
 | `0x23` | `EX_VectorConst` | 3×float（LWC 下 3×double） | 向量 | `MakeVector` / 向量字面量 | 结构化 |
 | `0x41` | `EX_Vector3fConst` | 3×float（固定单精度） | 单精度向量 | UE5 LWC 之后的小向量特化 | — |
 | `0x22` | `EX_RotationConst` | 3×float（LWC 下 3×double） | 旋转 | `MakeRotator` | 结构化 |
@@ -268,13 +268,13 @@
   `EX_DefaultVariable`）、`Let` 家族、六种调用形态 + `EX_InstanceDelegate`、`Context` /
   `ClassContext` / `InterfaceContext`、`DynamicCast` / `MetaCast` / `ObjToInterfaceCast` /
   `PrimitiveCast`、`StructMemberContext`、`StructConst` / `ArrayConst` / `SetArray` / `MapConst`、
-  `ArrayGetByRef`、`Jump` / `JumpIfNot` / `ComputedJump` / `PushExecutionFlow` /
+  `ArrayGetByRef`、`SoftObjectConst`、`Jump` / `JumpIfNot` / `ComputedJump` / `PushExecutionFlow` /
   `PopExecutionFlow` / `PopExecutionFlowIfNot` / `Return` / `Nothing` / `EndOfScript`
 - **Raw 原样保留（字节安全，不可读）**：`EX_SwitchValue`、`EX_BindDelegate`、
   `EX_AddMulticastDelegate` / `EX_RemoveMulticastDelegate`、`EX_Context_FailSilent`（少见），
   以及**跳过片段边界**的 `EX_JumpIfNot`（目标落在更外层代码里，见下）
 - **未覆盖**：其余（`SetSet` / `SetMap`、`ClassSparseDataVariable`、`EndParmValue`、`Skip`、
-  `Assert`、`IntConstByte`、`SoftObjectConst`、`PropertyConst`、`FieldPathConst`、
+  `Assert`、`IntConstByte`、`PropertyConst`、`FieldPathConst`、
   `Vector3fConst`、调试类、AutoRTFM）
 
 结构还原有一条重要边界：`EX_JumpIfNot` 的落点如果**越出当前片段**（共享尾部 / 状态机），
@@ -287,5 +287,5 @@
 - 嵌套在**其他位置**（如 `EX_Context.ObjectExpression`）→ 可能退化，但
   `DecompileVerified` 会把回编译结果与原始字节比对，不符就整体退回扁平模式
 
-所以最终产出的字节永远是安全的，代价只是可读性。这条边界正是 **1305/1305** 逐字节一致的原因——
+所以最终产出的字节永远是安全的，代价只是可读性。这条边界正是 **8115/8115** 逐字节一致的原因——
 宁可退化，也不猜。

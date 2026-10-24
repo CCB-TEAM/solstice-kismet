@@ -36,7 +36,13 @@ foreach ($a in $Assets) {
     if (-not (Test-Path $uasset)) { $missing += $a; continue }
 
     $listOut = & dotnet $probe $uasset $Usmap 2>&1 | Out-String
-    $names = [regex]::Matches($listOut, '(?m)^\s+\d+\s+条\s+(\S+)\s*$') | ForEach-Object { $_.Groups[1].Value }
+    # 函数名可能带空格（如 `Get Unread Messages In Battle`），必须整行捕获，
+    # 否则这些函数会被静默跳过——分母少算比失败更危险。
+    $names = [regex]::Matches($listOut, '(?m)^\s+\d+\s+条\s+(.+?)\s*$') | ForEach-Object { $_.Groups[1].Value }
+    $declared = [regex]::Match($listOut, '\[probe\] (\d+) 个带字节码的函数').Groups[1].Value
+    if ($declared -and [int]$declared -ne $names.Count) {
+        Write-Host "[$a] 警告：探针声明 $declared 个函数，正则解析出 $($names.Count) 个"
+    }
     if (-not $names) { $missing += "$a(无函数)"; continue }
 
     foreach ($n in $names) {

@@ -348,6 +348,9 @@ public static class KismetCompiler
                 case UnicodeStringArg us:
                     return new EX_UnicodeStringConst { Value = us.Value };
 
+                case SoftObjectArg soft:
+                    return new EX_SoftObjectConst { Value = ToExpr(soft.Value) };
+
                 case InstanceDelegateArg idl:
                     return new EX_InstanceDelegate { FunctionName = idl.FunctionName };
 

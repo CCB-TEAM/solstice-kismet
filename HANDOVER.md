@@ -16,14 +16,14 @@
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **49/49** |
-| 真实资产往返一致（`Blueprints/Logic` 全部 28 个资产） | **1305 / 1305 (100%)** |
+| 自检 `tests/Solstice.Kismet.Verify` | **51/51** |
+| 真实资产往返一致（`Logic` 28 资产 + `Cards` 2053 资产） | **8115 / 8115 (100%)** |
 | 结构还原退化（6 资产口径 131 函数） | **3 个函数**（原 47 个） |
 | CI | 绿 |
 
 > **分母修正**：文档曾记 118/119，那是**错的分母**。探针列函数时用了 `.Take(30)`，
 > `BPC_ChallengeAndRematch` 实际 48 个函数被截到 30 个。去掉截断后 6 资产是 131 个函数，
-> 扩到 `Logic` 全部 28 个资产是 **1305** 个函数。这正是第十节第 4 条的复发。
+> 扩到 `Logic` 全部 28 个资产是 1328 个函数、再加 `Cards` 全部 2053 个资产是 6787 个函数，合计 **8115**。
 
 测试样本：`D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic` 下**全部**资产
 （其中 4 个没有带字节码的函数：`BP_HandCardRichTextCache`、`E_PreGameStates`、
@@ -55,7 +55,8 @@ src/Solstice.Kismet/
   UberGraph.cs         ubergraph 结构分析：调度头 / 尾声 / 基本块 / 终止符
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
-tests/Solstice.Kismet.Verify/  49 项自检
+tools/KismetCoverage/  同进程批量覆盖率：一次扫完整个目录，输出失败原因聚类
+tests/Solstice.Kismet.Verify/  51 项自检
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 ```
@@ -99,7 +100,7 @@ docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新�
 3. 与原始字节比对
 4. **不符就退回扁平模式**（`options.Flatten = true`，纯指令、不还原 if/loop）
 
-所以任何结构还原的改动，只要扁平模式仍是 1305/1305，就不会破坏保真性。
+所以任何结构还原的改动，只要扁平模式仍是 8115/8115，就不会破坏保真性。
 
 ## 五、必须知道的 UAssetAPI 陷阱
 
@@ -209,6 +210,33 @@ $env:KISMET_FLATTEN='1'   # 强制扁平模式（不还原 if/loop）
 逐个函数跑探针，分母取自探针列出的函数总数，最后打印 `覆盖率: N / N`。
 **不要手工挑函数统计**——分母错了比失败更危险。
 
+> 这个脚本的正则曾用 `(\S+)$` 抓函数名，**名字带空格的函数会被整行漏掉**
+> （如 `Get Unread Messages In Battle`、`Has New Messages`）。被漏掉的函数不算失败，
+> 所以看起来一切正常——这是最阴的一种分母错误。现已改成 `(.+?)$`，并核对探针声明的总数。
+
+### 批量覆盖率 `tools/KismetCoverage`
+
+逐函数起进程太慢（Cards 2000+ 资产、近 7000 函数要几小时），这个工具**一次进程扫完整个目录**：
+
+```powershell
+dotnet tools\KismetCoverage\bin\Debug\net10.0\KismetCoverage.dll <资产目录> <usmap> [--max N] [--verbose]
+```
+
+输出：资产数 / 函数数 / 逐字节一致数 / 结构化退化数，以及**失败原因聚类**
+（`表达式 <op> 暂不支持`、`字节不一致 @offset 位于第 k 条 <op>`），失败样本最多 20 条。
+扫一遍 `Cards` 约几分钟。
+
+用它测出的真实口径（2026-10）：
+
+| 目录 | 资产 | 函数 | 结果 |
+|---|---:|---:|---|
+| `Blueprints/Logic` | 28 | 1328 | **1328/1328** |
+| `Blueprints/Cards` | 2053 | 6787 | **6787/6787** |
+| **合计** | **2081** | **8115** | **8115/8115** |
+
+Cards 那一轮第一次跑出 2 个失败，都指向 `EX_SoftObjectConst`（软引用常量），
+补齐后 100% 通过——**扩大语料的价值就在这**：28 个 Logic 资产里根本没出现过这个指令。
+
 ### 数据位置
 
 ```
@@ -226,15 +254,15 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 49/49
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 51/51
 
 .\tools\coverage.ps1 `
   -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
   -Usmap    'D:\devenv\fmodel\Output\.data\kards1.60_No_UE4SS.jmap.3f2e5a28df2c1f777a1e80.usmap'
-# 必须 1305 / 1305
+# 必须 8115 / 8115
 ```
 
-**提交前必须两项都绿**：自检 49/49 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 51/51 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git
@@ -308,8 +336,17 @@ foreach (var n in f.Then) EmitNode(n);
 
 曾经只测 `BP_LevelManager` 的 11 个函数就报「11/11 全部通过」，实际该资产有 17 个函数，全量是 64/77。**报告覆盖率必须说明样本范围**。
 
-**这条又复发过一次**：探针列函数时带 `.Take(30)`，`BPC_ChallengeAndRematch` 实际 48 个函数被截成 30 个，
-于是文档里的「118/119」分母也是错的（真实分母 131）。现在截断已去掉，且分母一律从探针的总数取。
+**这条又复发过两次**：
+
+1. 探针列函数时带 `.Take(30)`，`BPC_ChallengeAndRematch` 实际 48 个函数被截成 30 个，
+   于是文档里的「118/119」分母也是错的（真实分母 131）。截断已去掉。
+2. `coverage.ps1` 用 `(\S+)$` 抓函数名，**名字带空格的函数整行漏掉**
+   （`Get Unread Messages In Battle`、`Has New Messages`）。被漏掉的函数不报失败，
+   所以「1305/1305 全绿」看起来毫无问题——真实分母是 1328。
+   现在改用 `(.+?)$`，并与探针声明的函数总数交叉核对。
+
+**教训**：分母错误有两种形态，一种是「多算」（截断、重复），一种是「少算」（漏行）——
+后者更危险，因为它表现为全绿。任何覆盖率脚本都要把「声明的总数」和「实际跑过的数」对账。
 
 ### 5. 「权限不足」先分清是沙箱还是 open 模式
 

@@ -129,6 +129,9 @@ public sealed record InstanceDelegateArg(FName FunctionName) : KArg(PinType.Obje
 /// <summary>变换字面量，对应 EX_TransformConst。</summary>
 public sealed record TransformArg(FTransform Value) : KArg(PinType.Struct);
 
+/// <summary>软对象引用字面量，对应 EX_SoftObjectConst（载荷本身是一个表达式）。</summary>
+public sealed record SoftObjectArg(KArg Value) : KArg(PinType.Object);
+
 /// <summary>Map 字面量，对应 EX_MapConst（两个内层属性指针 + 元素）。</summary>
 public sealed record MapConstArg(
     KismetPropertyPointer Key,
