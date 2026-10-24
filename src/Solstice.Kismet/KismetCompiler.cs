@@ -179,6 +179,20 @@ public static class KismetCompiler
                 case NoObjectArg:
                     return new EX_NoObject();
 
+                case DoubleArg d:
+                    return new EX_DoubleConst { Value = d.Value };
+
+                case FloatArg f2:
+                    return new EX_FloatConst { Value = f2.Value };
+
+                case StructConstArg st:
+                    return new EX_StructConst
+                    {
+                        Struct = st.Struct,
+                        StructSize = st.Size,
+                        Value = st.Values.Select(ToExpr).ToArray()
+                    };
+
                 case StructMemberArg sm:
                     return new EX_StructMemberContext
                     {

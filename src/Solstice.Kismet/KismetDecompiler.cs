@@ -297,6 +297,9 @@ public static class KismetDecompiler
         EX_Self => new SelfArg(),
         EX_ObjectConst oc => new ObjectArg(oc.Value),
         EX_NoObject => new NoObjectArg(),
+        EX_DoubleConst d => new DoubleArg(d.Value),
+        EX_FloatConst f2 => new FloatArg(f2.Value),
+        EX_StructConst st => new StructConstArg(st.Struct, st.StructSize, ToArgs(st.Value, options)),
         EX_StructMemberContext sm => new StructMemberArg(
             ToArg(sm.StructExpression, options) ?? new NoObjectArg(),
             sm.StructMemberExpression!,

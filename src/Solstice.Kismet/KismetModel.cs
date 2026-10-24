@@ -88,6 +88,16 @@ public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool
 /// <summary>布尔字面量，对应 EX_True / EX_False。</summary>
 public sealed record BoolArg(bool Value) : KArg(PinType.Bool);
 
+/// <summary>浮点字面量，对应 EX_DoubleConst / EX_FloatConst。</summary>
+public sealed record DoubleArg(double Value) : KArg(PinType.Float);
+
+/// <summary>单精度字面量，对应 EX_FloatConst。</summary>
+public sealed record FloatArg(float Value) : KArg(PinType.Float);
+
+/// <summary>结构体字面量，对应 EX_StructConst。</summary>
+public sealed record StructConstArg(FPackageIndex Struct, int Size, IReadOnlyList<KArg> Values)
+    : KArg(PinType.Struct);
+
 /// <summary>空对象字面量，对应 EX_NoObject。</summary>
 public sealed record NoObjectArg() : KArg(PinType.Object);
 
