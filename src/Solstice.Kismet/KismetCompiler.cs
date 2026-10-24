@@ -170,6 +170,25 @@ public static class KismetCompiler
                     // 复用现有字节码里的属性指针：FFieldPath 自带变量名与归属索引
                     return new EX_LocalVariable { Variable = pointer };
 
+                case SelfArg:
+                    return new EX_Self();
+
+                case ObjectArg oc:
+                    return new EX_ObjectConst { Value = oc.Value };
+
+                case NoObjectArg:
+                    return new EX_NoObject();
+
+                case StructMemberArg sm:
+                    return new EX_StructMemberContext
+                    {
+                        StructMemberExpression = sm.Member,
+                        StructExpression = ToExpr(sm.Struct)
+                    };
+
+                case StringArg sc:
+                    return new EX_StringConst { Value = sc.Value };
+
                 case NameArg n:
                     return new EX_NameConst { Value = n.Value };
 

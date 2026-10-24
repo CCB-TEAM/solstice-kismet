@@ -294,6 +294,14 @@ public static class KismetDecompiler
         EX_IntOne => new IntArg(1),
         EX_True => new BoolArg(true),
         EX_False => new BoolArg(false),
+        EX_Self => new SelfArg(),
+        EX_ObjectConst oc => new ObjectArg(oc.Value),
+        EX_NoObject => new NoObjectArg(),
+        EX_StructMemberContext sm => new StructMemberArg(
+            ToArg(sm.StructExpression, options) ?? new NoObjectArg(),
+            sm.StructMemberExpression!,
+            PropName(sm.StructMemberExpression)),
+        EX_StringConst sc => new StringArg(sc.Value),
         EX_NameConst nc => new NameArg(nc.Value),
         EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
         EX_LocalOutVariable lo => new PointerArg(lo.Variable!, TargetName(lo), Out: true),
@@ -340,7 +348,7 @@ public static class KismetDecompiler
 
         foreach (var p in parameters)
         {
-            var a = ToArg(p, options);
+            var a = ToArg(p, options) ?? throw new InvalidOperationException($"参数表达式 {p.Inst} 暂不支持");
             if (a is not null)
             {
                 args.Add(a);

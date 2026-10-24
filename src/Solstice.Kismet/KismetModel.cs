@@ -88,6 +88,22 @@ public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool
 /// <summary>布尔字面量，对应 EX_True / EX_False。</summary>
 public sealed record BoolArg(bool Value) : KArg(PinType.Bool);
 
+/// <summary>空对象字面量，对应 EX_NoObject。</summary>
+public sealed record NoObjectArg() : KArg(PinType.Object);
+
+/// <summary>结构体成员访问，对应 EX_StructMemberContext。</summary>
+public sealed record StructMemberArg(KArg Struct, KismetPropertyPointer Member, string Name = "")
+    : KArg(PinType.Struct);
+
+/// <summary>对象字面量，对应 EX_ObjectConst。</summary>
+public sealed record ObjectArg(FPackageIndex Value) : KArg(PinType.Object);
+
+/// <summary>字符串字面量，对应 EX_StringConst。</summary>
+public sealed record StringArg(string Value) : KArg(PinType.String);
+
+/// <summary>隐式 this，对应 EX_Self。</summary>
+public sealed record SelfArg() : KArg(PinType.Object);
+
 /// <summary>名字字面量，对应 EX_NameConst。</summary>
 public sealed record NameArg(FName Value) : KArg(PinType.String);
 
