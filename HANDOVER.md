@@ -12,18 +12,25 @@
 
 核心指标是**往返逐字节一致**（decompile → compile → 序列化，与原始字节完全相同）。
 
-## 二、当前状态（提交 `0c4f1fc`）
+## 二、当前状态（提交 `c498dd4` 之后）
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **16/16** |
-| 真实资产往返一致 | **118 / 119 (99.2%)** |
+| 自检 `tests/Solstice.Kismet.Verify` | **19/19** |
+| 真实资产往返一致 | **131 / 131 (100%)** |
 | CI | 绿 |
 
 测试样本：`D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic` 下 6 个资产的**全部**函数
 （`BP_Chat`、`BP_MatchData`、`BPC_TurnTimer`、`BP_LevelManager`、`BP_NotificationManager`、`BPC_ChallengeAndRematch`）。
 
-唯一失败：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager`，`Context 长度 37 vs 36`（差 1 字节）。
+> **分母修正**：文档此前记的 118/119 是**错的分母**。探针列函数时用了 `.Take(30)`，
+> `BPC_ChallengeAndRematch` 实际有 48 个函数，被截到 30 个，于是 6 个函数从未被测过。
+> 去掉截断后全量是 131 个函数，全部通过。这正是第十节第 4 条「覆盖率必须核对分母」的复发。
+
+原先唯一的失败 `BP_LevelManager.ExecuteUbergraph_BP_LevelManager`（`Context 长度 37 vs 36`）
+已修复：`EX_Context.ObjectExpression` 里包着的是 **`EX_InterfaceContext`**，
+反编译把包装层脱掉了，回编译只剩里面的 `EX_LocalVariable`，每条少 1 字节。
+修法是新增 `InterfaceContextArg` 原样保留（见第四节）。
 
 ## 三、目录结构
 
@@ -39,7 +46,8 @@ src/Solstice.Kismet/
   FunctionCatalog.cs   函数签名表（jmap functions.json）
   KismetWorkspace.cs   对外门面：加载资产、选函数、编译、回写
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
-tests/Solstice.Kismet.Verify/  16 项自检
+tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
+tests/Solstice.Kismet.Verify/  19 项自检
 ```
 
 ## 四、最关键的设计原则
@@ -57,6 +65,7 @@ tests/Solstice.Kismet.Verify/  16 项自检
 | `RValuePointer` | `ContextCallNode`/`CallArg` | UE 里允许为 `nullptr`，重建容易 NRE |
 | `CallShape` | 调用节点 | UE 的判定是 6 个条件的合取，其中 `GetCallerTargetsUnsupportedByCallee` 在 jmap 里**不存在**，无法复现 |
 | `RawArg` / `RawNode` | 任意 | 结构复杂的指令（如 `EX_SwitchValue` 含相对偏移）原样发回 |
+| `InterfaceContextArg` | `EX_Context.ObjectExpression` | `EX_InterfaceContext` 是**一层包装**，脱掉后回编译每条少 1 字节（曾致 37 vs 36） |
 
 ### 2. 「静默降级」是最大的敌人
 
@@ -80,7 +89,7 @@ tests/Solstice.Kismet.Verify/  16 项自检
 3. 与原始字节比对
 4. **不符就退回扁平模式**（`options.Flatten = true`，纯指令、不还原 if/loop）
 
-所以任何结构还原的改动，只要扁平模式仍是 118/119，就不会破坏保真性。
+所以任何结构还原的改动，只要扁平模式仍是 131/131，就不会破坏保真性。
 
 ## 五、必须知道的 UAssetAPI 陷阱
 
@@ -121,6 +130,11 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 
 `EX_SwitchValue` 目前走 `RawArg` 原样保留，**没有做结构化还原**。
 
+**残留的结构还原 bug**：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 现在字节一致了，
+但结构化模式仍会在 `[17] JumpIfNot 落点无效：exit=0 start=17 target=15` 处失败
+（`4249 vs 4195`），最后靠自动退化走扁平模式。这是 `EX_ComputedJump` 分发处的
+回跳目标（15）落在 `[0..1]` 之外导致的，纯可读性问题，不影响字节。
+
 ## 七、工具用法
 
 ### 探针 `tools/KismetProbe`
@@ -137,6 +151,23 @@ $env:KISMET_FLATTEN='1'   # 强制扁平模式（不还原 if/loop）
 ```
 
 退出码：0 = 逐字节一致，1 = 不一致。
+
+探针会把资产两半和 **usmap** 都复制到临时目录再打开——UAssetAPI 用
+`File.Open(ReadWrite)` 打开文件，只读位置（只读目录、受沙箱限制的工作区外路径）
+会抛 `UnauthorizedAccessException`，堆栈指向 `Usmap.PathToStream`，极易误判成权限问题。
+
+### 覆盖率 `tools/coverage.ps1`
+
+```powershell
+# 6 个样本资产（交接文档口径）
+.\tools\coverage.ps1 -AssetDir <资产目录> -Usmap <usmap>
+
+# 目录下全部资产
+.\tools\coverage.ps1 -AssetDir <资产目录> -Usmap <usmap> -Assets *
+```
+
+逐个函数跑探针，分母取自探针列出的函数总数，最后打印 `覆盖率: N / N`。
+**不要手工挑函数统计**——分母错了比失败更危险。
 
 ### 数据位置
 
@@ -155,10 +186,15 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 16/16
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 19/19
+
+.\tools\coverage.ps1 `
+  -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
+  -Usmap    'D:\devenv\fmodel\Output\.data\kards1.60_No_UE4SS.jmap.3f2e5a28df2c1f777a1e80.usmap'
+# 必须 131 / 131
 ```
 
-**提交前必须两项都绿**：自检 16/16 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 19/19 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git
@@ -209,13 +245,29 @@ PowerShell 的 `.Replace()` 不匹配时**静默返回原字符串**，看不出
 
 曾经只测 `BP_LevelManager` 的 11 个函数就报「11/11 全部通过」，实际该资产有 17 个函数，全量是 64/77。**报告覆盖率必须说明样本范围**。
 
+**这条又复发过一次**：探针列函数时带 `.Take(30)`，`BPC_ChallengeAndRematch` 实际 48 个函数被截成 30 个，
+于是文档里的「118/119」分母也是错的（真实分母 131）。现在截断已去掉，且分母一律从探针的总数取。
+
+### 5. 「权限不足」先分清是沙箱还是 open 模式
+
+`UnauthorizedAccessException` 指向 `Usmap.PathToStream` / `Usmap..ctor` 时，先怀疑
+**UAssetAPI 用 `File.Open(path, FileMode.Open)` 打开了只读文件**（该重载等于 `ReadWrite`），
+而不是文件真的没读权限。判别方法：用 `[IO.File]::OpenRead` 读同一路径，能读就是 open 模式问题。
+探针已把 usmap 一并复制到临时目录，正常路径不会再遇到。
+
+判断是否受沙箱限制时还要注意：**pwsh 自身的文件操作可能成功，而 `dotnet` 子进程被拒**，
+所以「我用 pwsh 能读」不能推出「探针能读」。
+
 ## 十一、下一步（按收益排序）
 
-### 1. 修最后一个失败（1 个函数）
+### 1. 修结构还原的 `EX_ComputedJump` 回跳（可读性）
 
-`BP_LevelManager.ExecuteUbergraph_BP_LevelManager`：`Context 长度 37 vs 36`，差 1 字节。
+`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 字节已一致，但结构化模式仍失败：
+`[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，回编译 4249 vs 4195，最后退化成扁平。
 
-跑探针看 `StructuralDiff` 的递归输出，定位是 `EX_Context` 的哪个子字段长度不对。可能是 `RValuePointer` 的 `FFieldPath` 路径段数差异，或 `Offset` 计算差了 1。
+根因在 `BuildBlock` 处理 `EX_ComputedJump` / `EX_PushExecutionFlow` 的跳转目标落点：
+`target=15` 落在首块 `[0..1]` 的边界外，`Block` 的 end 推导把它算成 0。
+修好之后这个函数能从扁平升级成可读的 if/loop 结构。
 
 ### 2. `EX_SwitchValue` 结构化还原（提升可读性）
 
@@ -236,9 +288,9 @@ public KismetExpression DefaultTerm;
 
 ### 4. 扩大测试样本
 
-当前只测了 `Blueprints/Logic` 下 6 个资产。建议扩展到：
+当前只测了 `Blueprints/Logic` 下 6 个资产（131 个函数全部通过）。建议扩展到：
 
-- `Blueprints/Logic` 全部 28 个资产
+- `Blueprints/Logic` 全部 28 个资产 → `.\tools\coverage.ps1 ... -Assets *`
 - `Blueprints/Cards` 下的卡牌蓝图（2,000+ 个，含 `LetValueOnPersistentFrame` 等特殊形态）
 
 跑法见第七节。

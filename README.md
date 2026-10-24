@@ -160,5 +160,5 @@ var nodes = KismetDecompiler.Decompile(
 dotnet run --project tests/Solstice.Kismet.Verify
 ```
 
-16 项断言，覆盖扁平序列、带参调用、if、loop、以及「没有 measure 时不崩且保留原文」。
+19 项断言，覆盖扁平序列、带参调用、if、loop、`EX_InterfaceContext` 包装层、以及「没有 measure 时不崩且保留原文」。
 全部使用手工构造的表达式树，**不依赖任何游戏资产**。

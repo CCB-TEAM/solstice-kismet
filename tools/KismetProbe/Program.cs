@@ -16,7 +16,9 @@ if (args.Length < 2)
     return 2;
 }
 
-// UAssetAPI 用 File.Open(ReadWrite) 打开，先把两半复制到可写目录
+// UAssetAPI 用 File.Open(ReadWrite) 打开，先把资产两半和 usmap 都复制到可写目录。
+// usmap 漏了这一步时，在任何只读位置（含受沙箱限制的工作区外路径）都会
+// UnauthorizedAccessException，而堆栈指向 Usmap.PathToStream，很容易误判成权限问题。
 var work = Path.Combine(Path.GetTempPath(), "kismet-probe-" + Guid.NewGuid().ToString("N")[..8]);
 Directory.CreateDirectory(work);
 var assetCopy = Path.Combine(work, "a.uasset");
@@ -27,7 +29,10 @@ if (File.Exists(uexpSrc))
     File.Copy(uexpSrc, Path.ChangeExtension(assetCopy, ".uexp"), true);
 }
 
-var asset = new UAsset(assetCopy, EngineVersion.VER_UE5_6, new Usmap(args[1]));
+var usmapCopy = Path.Combine(work, "m.usmap");
+File.Copy(args[1], usmapCopy, true);
+
+var asset = new UAsset(assetCopy, EngineVersion.VER_UE5_6, new Usmap(usmapCopy));
 
 var functions = asset.Exports.OfType<FunctionExport>()
     .Where(f => f.ScriptBytecode is { Length: > 0 })
@@ -36,7 +41,8 @@ var functions = asset.Exports.OfType<FunctionExport>()
 if (args.Length == 2)
 {
     Console.WriteLine($"[probe] {functions.Length} 个带字节码的函数");
-    foreach (var f in functions.OrderByDescending(x => x.ScriptBytecode!.Length).Take(30))
+    // 不设上限：曾用 Take(30) 截断列表，导致覆盖率分母少算（BPC_ChallengeAndRematch 30 vs 实际 48）
+    foreach (var f in functions.OrderByDescending(x => x.ScriptBytecode!.Length))
     {
         Console.WriteLine($"  {f.ScriptBytecode!.Length,5} 条  {f.ObjectName}");
     }
