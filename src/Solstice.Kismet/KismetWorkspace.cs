@@ -161,6 +161,110 @@ public sealed class KismetWorkspace
             StackNode: index);
     }
 
+    /// <summary>
+    /// 读-改-写一条龙：反编译 → 交给 <paramref name="transform"/> 改 → 编译写回。
+    ///
+    /// <para>
+    /// SDK 调用方最常用的一步就是「打开函数、改几个节点、写回去」，
+    /// 这个方法把三次调用压成一次，并且反编译那一步已经过字节校验。
+    /// </para>
+    /// </summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) Edit(
+        string functionName,
+        Func<IReadOnlyList<KNode>, IReadOnlyList<KNode>> transform)
+    {
+        var nodes = Decompile(functionName);
+        return Generate(transform(nodes), functionName);
+    }
+
+    /// <summary>
+    /// 在函数末尾（Return 之前）插入一次调用。
+    ///
+    /// <para>
+    /// 不给 <paramref name="args"/> 时按 jmap 签名自动生成占位参数；
+    /// 形态、Import 补齐、字节编码都由 <see cref="CreateCall"/> 负责。
+    /// </para>
+    /// </summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) InsertCall(
+        string functionName,
+        string calleeName,
+        params KArg[] args)
+    {
+        var call = CreateCall(calleeName, args.Length > 0 ? args : null);
+
+        return Edit(functionName, nodes =>
+        {
+            var list = nodes.ToList();
+            var at = list.Count > 0 && list[^1] is ReturnNode ? list.Count - 1 : list.Count;
+            list.Insert(at, call);
+            return list;
+        });
+    }
+
+    /// <summary>一次调用的一个引脚（编辑器 UI 渲染用）。</summary>
+    public sealed record CallPin(
+        string Name,
+        string Type,
+        string Dir,
+        string ClassName,
+        string EnumName,
+        KArg Value,
+        bool IsPlaceholder,
+        bool IsOutput);
+
+    /// <summary>一次待插入调用的完整描述：形态、归属、以及全部引脚。</summary>
+    public sealed record CallPlan(
+        string Function,
+        string OwnerPath,
+        string Flags,
+        CallShape Shape,
+        IReadOnlyList<CallPin> Pins);
+
+    /// <summary>
+    /// 生成一次调用的「计划」：形态怎么选、每个引脚是什么、哪些参数只是占位。
+    ///
+    /// <para>
+    /// 编辑器 UI 靠它渲染插入节点：输入引脚标成可填，占位引脚标成待用户替换，
+    /// 输出引脚（return / out）只读。实际插入仍走 <see cref="CreateCall"/>。
+    /// </para>
+    /// </summary>
+    public CallPlan PlanCall(string functionName, IReadOnlyList<KArg>? args = null)
+    {
+        var signature = Catalog?.Find(null, functionName)
+                        ?? throw new InvalidOperationException(
+                            $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）");
+
+        var defaults = DefaultArgs(functionName);
+        var shape = Functions.Contains(functionName, StringComparer.Ordinal)
+            ? CallShape.Virtual
+            : signature.IsStatic ? CallShape.Final : CallShape.Context;
+
+        var pins = new List<CallPin>();
+        var inputIndex = 0;
+
+        foreach (var param in signature.Params)
+        {
+            var isInput = string.Equals(param.Dir, "in", StringComparison.OrdinalIgnoreCase);
+            if (isInput)
+            {
+                var arg = args is { Count: > 0 } && inputIndex < args.Count
+                    ? args[inputIndex]
+                    : defaults[inputIndex].Value;
+                var placeholder = defaults[inputIndex].IsPlaceholder && (args is null || inputIndex >= args.Count);
+
+                pins.Add(new CallPin(param.Name, param.Type, param.Dir, param.Class, param.Enum, arg, placeholder, false));
+                inputIndex++;
+            }
+            else
+            {
+                // return / out：没有值可填，只描述类型
+                pins.Add(new CallPin(param.Name, param.Type, param.Dir, param.Class, param.Enum, new NoObjectArg(), false, true));
+            }
+        }
+
+        return new CallPlan(functionName, signature.OwnerPath, signature.Flags, shape, pins);
+    }
+
     /// <summary>自动生成的参数：值本身 + 它是不是「占位」（无法忠实合成的类型）。</summary>
     public sealed record DefaultArg(string Name, string Type, KArg Value, bool IsPlaceholder);
 
@@ -190,7 +294,8 @@ public sealed class KismetWorkspace
         "FloatProperty" => new DefaultArg(param.Name, param.Type, new FloatArg(0f), false),
         "DoubleProperty" => new DefaultArg(param.Name, param.Type, new DoubleArg(0d), false),
         "StrProperty" => new DefaultArg(param.Name, param.Type, new StringArg(""), false),
-        "NameProperty" => new DefaultArg(param.Name, param.Type, new NameArg(new FName(_asset, "")), false),
+        // FName 的默认值是 None；空字符串不能进名字表（AddNameReference 会抛）
+        "NameProperty" => new DefaultArg(param.Name, param.Type, new NameArg(new FName(_asset, "None")), false),
         "ObjectProperty" or "ClassProperty" or "DelegateProperty" or "SoftObjectProperty"
             => new DefaultArg(param.Name, param.Type, new NoObjectArg(), false),
 

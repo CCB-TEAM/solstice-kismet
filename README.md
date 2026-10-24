@@ -36,10 +36,19 @@ var nodes0 = ws.Decompile("ExecuteUbergraph_BP_Chat");
 var baked = ws.BakeUbergraph("ExecuteUbergraph_BP_Chat");
 // baked.EntryOffsets / baked.EpilogueOffset
 
-// 2.6 新增一次调用（编辑器「插入节点」）：形态按 jmap 签名选，
-//     函数不在 Import 表里时会自动补条目（接口类资产会按 UE 约定合成模板）
-var call = ws.CreateCall("KardsClearLaunchNotification", []);
-var callOnThis = ws.CreateCall("ClearCardTexts", []);   // 非静态 → EX_Context + this
+// 2.6 新增一次调用（SDK 常用）：
+//     形态按 jmap 签名选；函数不在 Import 表里会自动补条目；
+//     不给参数时按签名自动生成占位参数
+var call = ws.CreateCall("Greater_IntInt");      // [IntArg(0), IntArg(0)]
+var onThis = ws.CreateCall("ClearCardTexts");    // 非静态 → EX_Context + this
+
+// 2.7 读-改-写一条龙：反编译（已字节校验）→ 改 → 编译写回
+ws.InsertCall("SomeFunction", "KardsClearLaunchNotification");   // 末尾插一次调用
+ws.Edit("SomeFunction", nodes => nodes.SkipLast(1));             // 任意变换
+
+// 想先看引脚、哪些参数只是占位（编辑器 UI 用）
+var plan = ws.PlanCall("PrintString");
+foreach (var pin in plan.Pins) { /* pin.IsPlaceholder 标出无法忠实合成的参数 */ }
 
 // 3. 描述逻辑
 var nodes = new List<KNode>

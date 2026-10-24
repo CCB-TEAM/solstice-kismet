@@ -31,6 +31,8 @@ var insertIndex = Array.IndexOf(args, "--insert");
 var insertCallee = insertIndex >= 0 && insertIndex + 1 < args.Length ? args[insertIndex + 1] : null;
 var catalogIndex = Array.IndexOf(args, "--catalog");
 var catalogPath = catalogIndex >= 0 && catalogIndex + 1 < args.Length ? args[catalogIndex + 1] : null;
+var planIndex = Array.IndexOf(args, "--plan");
+var planFunction = planIndex >= 0 && planIndex + 1 < args.Length ? args[planIndex + 1] : null;
 
 if (!Directory.Exists(assetDir))
 {
@@ -49,6 +51,11 @@ Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPat
 if (insertCallee is not null)
 {
     return RunInsert(files, usmapPath, insertCallee, catalogPath);
+}
+
+if (planFunction is not null)
+{
+    return RunPlan(files, usmapPath, planFunction, catalogPath);
 }
 
 if (useWorkspace)
@@ -300,6 +307,48 @@ static int RunWorkspace(string[] files, string usmapPath)
 // 插入调用端到端验证：反编译 → CreateCall（按 jmap 签名选形态）→ 编译写回 →
 // 存盘 → 重新打开 → 反编译确认新调用在、且能再读回来。
 // 走的是编辑器「插入节点」的完整链路。
+// 打印 PlanCall 的结果：形态 + 每个引脚 + 哪些是占位。
+// 这是 PlanCall 的唯一实测入口（自检没有资产，跑不到它）。
+static int RunPlan(string[] files, string usmapPath, string function, string? catalogPath)
+{
+    if (catalogPath is null || !File.Exists(catalogPath))
+    {
+        Console.Error.WriteLine("--plan 需要 --catalog <functions.json>");
+        return 2;
+    }
+
+    var workDir = Path.Combine(Path.GetTempPath(), "kismet-plan-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(workDir);
+
+    var file = files.FirstOrDefault(f => File.Exists(Path.ChangeExtension(f, ".uexp")));
+    if (file is null)
+    {
+        Console.Error.WriteLine("没有可用资产");
+        return 2;
+    }
+
+    var ws = KismetWorkspace.Open(
+        File.ReadAllBytes(file),
+        File.ReadAllBytes(Path.ChangeExtension(file, ".uexp")),
+        File.ReadAllBytes(usmapPath),
+        workDir);
+
+    ws.AttachCatalog(FunctionCatalog.Load(File.ReadAllText(catalogPath)));
+
+    var plan = ws.PlanCall(function);
+    Console.WriteLine($"PlanCall({function})");
+    Console.WriteLine($"  owner={plan.OwnerPath}");
+    Console.WriteLine($"  shape={plan.Shape}  flags={plan.Flags}");
+    foreach (var pin in plan.Pins)
+    {
+        var mark = pin.IsOutput ? "->" : pin.IsPlaceholder ? "??" : "  ";
+        Console.WriteLine($"  {mark} {pin.Name,-24} {pin.Type,-18} {pin.Dir,-7} {pin.Value.GetType().Name}");
+    }
+
+    Directory.Delete(workDir, true);
+    return plan.Pins.Count > 0 ? 0 : 1;
+}
+
 static int RunInsert(string[] files, string usmapPath, string callee, string? catalogPath)
 {
     if (catalogPath is null || !File.Exists(catalogPath))
@@ -342,19 +391,9 @@ static int RunInsert(string[] files, string usmapPath, string callee, string? ca
 
             total++;
 
-            var nodes = ws.Decompile(target).ToList();
-            var call = ws.CreateCall(callee); // 参数按签名自动生成
+            // 便捷 API：一行完成「反编译 + 插入调用 + 编译写回」
+            ws.InsertCall(target, callee);
             var expectedArgs = catalog.Find(null, callee)?.Inputs.Count ?? -1;
-            if (nodes.Count > 0 && nodes[^1] is ReturnNode)
-            {
-                nodes.Insert(nodes.Count - 1, call);
-            }
-            else
-            {
-                nodes.Add(call);
-            }
-
-            ws.Generate(nodes, target);
             var saved = ws.Save(workDir, "inserted.uasset");
 
             // 重新打开存盘结果，确认新调用能反编译回来（参数个数也要对上）

@@ -238,6 +238,28 @@ dotnet tools\KismetCoverage\bin\Debug\net10.0\KismetCoverage.dll <资产目录> 
 实测 `函数 8115，成功 8115，失败 0`。这个模式是门面代码唯一的实测入口——
 CI 机器上没有资产，自检跑不到它。
 
+### SDK 便捷 API（`KismetWorkspace`）
+
+调用方最常做的「读-改-写」，现在各一行：
+
+| 方法 | 作用 |
+|---|---|
+| `Decompile(name)` | 反编译成节点（三种表示之一，已字节校验） |
+| `Edit(name, transform)` | 反编译 → 交给委托改 → 编译写回 |
+| `InsertCall(name, callee)` | 在末尾（Return 之前）插一次调用，参数按签名自动生成 |
+| `CreateCall(name)` | 只造节点，不写回；形态按签名选，Import 缺失时自动补 |
+| `DefaultArgs(name)` | 看默认参数，`IsPlaceholder` 标出无法忠实合成的 |
+| `PlanCall(name)` | 引脚级描述（编辑器 UI 用），同标占位 |
+| `BakeUbergraph(name)` | 重烘 ubergraph 并返回入口偏移表 |
+
+`--plan` 模式暴露过一个真 bug：`NameProperty` 的默认值原本用空字符串建 `FName`，
+而 `AddNameReference` **不接受空 FString**（`Cannot add an empty FString to the name map`）。
+FName 引脚的默认值应该是 `None`——UE 里也是这个约定。
+
+实测（`Logic` 24 个有函数的资产）：`Greater_IntInt`（2 int）、`Concat_StrStr`（2 str）、
+`PrintString`（object/str/bool/struct/float/name 混合）各 **24/24**，
+写回重读后参数个数与签名一致。
+
 ### 插入调用验证 `--insert`
 
 ```powershell
