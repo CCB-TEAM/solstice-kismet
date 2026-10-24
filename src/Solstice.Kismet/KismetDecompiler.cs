@@ -11,7 +11,8 @@ public sealed record DecompileOptions(
     Func<KismetExpression, uint>? Measure = null,
     Func<FPackageIndex, string?>? ResolveImport = null,
     Action<string>? Warn = null,
-    bool Flatten = false);
+    bool Flatten = false,
+    bool InsideUberSection = false);
 
 /// <summary>
 /// Kismet 字节码 → 平铺节点模型。
@@ -40,6 +41,18 @@ public static class KismetDecompiler
         uint baseOffset = 0)
     {
         options ??= new DecompileOptions();
+
+        // Ubergraph 走独立的展开通道：它是「调度头 + 入口段 + 尾声」的基本块图，
+        // 不是可以嵌套还原的控制流。段体反编译时 InsideUberSection=true，避免递归。
+        if (!options.Flatten && !options.InsideUberSection && baseOffset == 0)
+        {
+            var uber = UberGraph.Analyze(expressions, options);
+            if (uber is not null)
+            {
+                return DecompileUber(expressions, uber, options);
+            }
+        }
+
         var offsets = BuildOffsets(expressions, options.Measure, baseOffset);
 
         var nodes = new List<KNode>();
@@ -220,6 +233,62 @@ public static class KismetDecompiler
                     i++;
                     continue;
             }
+        }
+
+        return nodes;
+    }
+
+    /// <summary>
+    /// 展开 ubergraph：调度头 + 各入口段（段尾单独记）+ 尾声及其之后的指令。
+    /// 段体已经由 <see cref="UberGraph.Analyze"/> 反编译好，这里只负责组装与段间引用。
+    /// </summary>
+    private static IReadOnlyList<KNode> DecompileUber(
+        IReadOnlyList<KismetExpression> expressions,
+        UberGraphAnalysis uber,
+        DecompileOptions options)
+    {
+        var starts = uber.Sections.Select(s => s.StartOffset).ToArray();
+        var sections = new List<UberSectionNode>(uber.Sections.Count);
+
+        foreach (var section in uber.Sections)
+        {
+            int? targetOrdinal = null;
+            if (section.Terminator == UberTerminator.JumpToOtherSection && section.BranchTarget is { } target)
+            {
+                var index = Array.IndexOf(starts, target);
+                if (index >= 0)
+                {
+                    targetOrdinal = index;
+                }
+                else
+                {
+                    options.Warn?.Invoke($"ubergraph 段 #{section.Ordinal} 跳到未识别的段（offset={target}）");
+                }
+            }
+
+            sections.Add(new UberSectionNode(
+                section.StartOffset,
+                section.Nodes,
+                section.Terminator,
+                targetOrdinal,
+                section.TerminatorCondition));
+        }
+
+        var nodes = new List<KNode>
+        {
+            new UberGraphNode(uber.DispatchExpression ?? new NoObjectArg(), uber.PushesEpilogue, sections)
+        };
+
+        // 尾声及其之后的指令（Return / EndOfScript）照常还原，不能丢
+        if (uber.EpilogueIndex < expressions.Count)
+        {
+            var tail = new List<KismetExpression>(expressions.Count - uber.EpilogueIndex);
+            for (var i = uber.EpilogueIndex; i < expressions.Count; i++)
+            {
+                tail.Add(expressions[i]);
+            }
+
+            nodes.AddRange(Decompile(tail, options with { InsideUberSection = true }, uber.EpilogueOffset));
         }
 
         return nodes;

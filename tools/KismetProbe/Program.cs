@@ -157,9 +157,13 @@ if (uber is not null)
 }
 
 // 结构化还原 + 自校验：不符就自动退回扁平模式
-var nodes = KismetDecompiler.DecompileVerified(bytecode, origBytes0, options,
-    ns => Serialize(KismetCompiler.CompileToExpressions(
-        ns, vars0, funcs0, e => e.GetSize(asset), nm => new FName(asset, nm)), asset));
+// KISMET_STRUCT_ONLY=1 时跳过退化，直接看结构化结果差在哪（调试用）
+var structOnly = Environment.GetEnvironmentVariable("KISMET_STRUCT_ONLY") == "1";
+var nodes = structOnly
+    ? KismetDecompiler.Decompile(bytecode, options)
+    : KismetDecompiler.DecompileVerified(bytecode, origBytes0, options,
+        ns => Serialize(KismetCompiler.CompileToExpressions(
+            ns, vars0, funcs0, e => e.GetSize(asset), nm => new FName(asset, nm)), asset));
 Console.WriteLine();
 Console.WriteLine($"=== 反编译（{nodes.Count} 个节点）===");
 foreach (var node in nodes)
@@ -223,6 +227,36 @@ if (!same)
     }
 
     KismetProbe.StructuralDiff.Report(bytecode, regenerated, asset);
+
+    // 回编译结果里 CodeOffset 仍是 0 的跳转，说明它有补丁没打上（这类 bug 最难找）
+    var zeroJumps = new List<int>();
+    for (var i = 0; i < regenerated.Count; i++)
+    {
+        var isZero = regenerated[i] switch
+        {
+            EX_Jump j => j.CodeOffset == 0,
+            EX_JumpIfNot j => j.CodeOffset == 0,
+            EX_PushExecutionFlow p => p.PushingAddress == 0,
+            _ => false
+        };
+
+        if (isZero)
+        {
+            zeroJumps.Add(i);
+        }
+    }
+
+    if (zeroJumps.Count > 0)
+    {
+        Console.WriteLine($"  未打补丁的跳转: {string.Join(", ", zeroJumps.Select(i => "#" + i))}");
+        foreach (var i in zeroJumps.Take(3))
+        {
+            for (var k = Math.Max(0, i - 2); k <= Math.Min(regenerated.Count - 1, i + 2); k++)
+            {
+                Console.WriteLine($"    {(k == i ? ">" : " ")} #{k} {regenerated[k].Inst}");
+            }
+        }
+    }
 }
 
 Directory.Delete(work, true);
@@ -278,6 +312,26 @@ static string Describe(KNode node, int depth)
 
         case LoopNode l:
             return $"{pad}Loop ({Arg(l.Condition)})\n" + string.Join("\n", l.Body.Select(n => Describe(n, depth + 1)));
+        case UberGraphNode uber:
+        {
+            var head = $"{pad}UberGraph dispatch={Arg(uber.DispatchExpression)}" +
+                       (uber.PushesEpilogue ? " push" : "") + $"  {uber.Sections.Count} 段";
+            var body = string.Join("\n", uber.Sections.Select(s => Describe(s, depth + 1)));
+            return head + "\n" + body;
+        }
+
+        case UberSectionNode section:
+        {
+            var tail = section.TargetOrdinal is { } t ? $" -> #{t}" : "";
+            var head = $"{pad}Section @{section.StartOffset} {section.Terminator}{tail}";
+            if (section.Nodes.Count == 0)
+            {
+                return head;
+            }
+
+            return head + "\n" + string.Join("\n", section.Nodes.Select(n => Describe(n, depth + 1)));
+        }
+
         case ReturnNode r:
             return r.Value is null ? $"{pad}Return" : $"{pad}Return {Arg(r.Value)}";
         default:

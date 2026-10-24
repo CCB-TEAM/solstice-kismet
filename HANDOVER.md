@@ -16,9 +16,9 @@
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **40/40** |
+| 自检 `tests/Solstice.Kismet.Verify` | **46/46** |
 | 真实资产往返一致（`Blueprints/Logic` 全部 28 个资产） | **1305 / 1305 (100%)** |
-| 结构还原退化（6 资产口径 131 函数） | **7 个函数**（原 47 个） |
+| 结构还原退化（6 资产口径 131 函数） | **3 个函数**（原 47 个） |
 | CI | 绿 |
 
 > **分母修正**：文档曾记 118/119，那是**错的分母**。探针列函数时用了 `.Take(30)`，
@@ -34,7 +34,7 @@
 1. **字节保真**：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 的 `Context 37 vs 36`——
    `EX_Context.ObjectExpression` 里包着 `EX_InterfaceContext`，反编译把包装层脱掉了。
    新增 `InterfaceContextArg` 原样保留（见第四节）。
-2. **可读性**：结构还原退化从 47 个函数降到 7 个，见第六节。
+2. **可读性**：结构还原退化从 47 个函数降到 3 个，见第六节。
    顺带补齐了 8 类指令（`MetaCast` / `ClassContext` / `DefaultVariable` / `ArrayGetByRef` /
    `UnicodeStringConst` / `InstanceDelegate` / `TransformConst` / `MapConst`），
    这才让 28 资产全量跑通。
@@ -52,9 +52,10 @@ src/Solstice.Kismet/
   CompileContext.cs
   FunctionCatalog.cs   函数签名表（jmap functions.json）
   KismetWorkspace.cs   对外门面：加载资产、选函数、编译、回写
+  UberGraph.cs         ubergraph 结构分析：调度头 / 尾声 / 基本块 / 终止符
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
-tests/Solstice.Kismet.Verify/  40 项自检
+tests/Solstice.Kismet.Verify/  46 项自检
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 ```
@@ -157,14 +158,16 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 
 | 指标 | 修前 | 现在 |
 |---|---|---|
-| 结构还原退化（整函数退回扁平） | 47 | **7** |
-| Raw 节点总数 | 260 | 190 |
+| 结构还原退化（整函数退回扁平） | 47 | **3** |
+| Raw 节点总数 | 260 | 190（ubergraph 展开后另有下降） |
 
-剩下 7 个都是 `ExecuteUbergraph_*` 这类状态机（`BPC_TurnTimer`、`BP_NotificationManager`、
-`BP_Chat`、`BPC_ChallengeAndRematch`、`BP_LevelManager.TryToGoHome`、
-`BPC_ChallengeAndRematch.ParseNotification`、`BPC_TurnTimer.setTimedOutAfterReconnect`）。
-它们字节完全一致，只是嵌套结构还还原不出来——下一步该做的是按跳转目标建基本块图
-（探针已有基本块分析代码可参考），而不是继续加节点类型。
+剩下 3 个都是**普通函数**里的共享尾部状态机：
+`BPC_TurnTimer.setTimedOutAfterReconnect`、`BP_LevelManager.TryToGoHome`、
+`BPC_ChallengeAndRematch.ParseNotification`。它们字节完全一致，只是嵌套结构还还原不出来。
+
+12 个 `ExecuteUbergraph_*` 已经全部**展开**成「调度头 + 入口段 + 尾声」
+（`UberGraphNode`），不再进入退化流程，细节见 [docs/ubergraph.md](docs/ubergraph.md)。
+下一步对普通函数该做的是按跳转目标建基本块图，而不是继续加节点类型。
 
 ## 七、工具用法
 
@@ -217,7 +220,7 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 40/40
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 46/46
 
 .\tools\coverage.ps1 `
   -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
@@ -225,7 +228,7 @@ dotnet run --project tests\Solstice.Kismet.Verify     # 必须 40/40
 # 必须 1305 / 1305
 ```
 
-**提交前必须两项都绿**：自检 40/40 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 46/46 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git
@@ -324,11 +327,27 @@ foreach (var n in f.Then) EmitNode(n);
 真实字节码不会出现这种越界落点。结果「目标越界就放弃结构化」这条正确规则反而让测试挂了。
 **合成测试的偏移必须和 `Measure` 的尺寸表算出来的一致**，否则测的是幻觉。
 
+### 8. 前向引用不能提前补丁（ubergraph 重新烘焙）
+
+跨段跳转可能指向**排在后面**的段。发射 `段 #81` 时若直接用 `sectionStart[86]` 打补丁，
+那时 86 还没发射，取到的是 `0`——字节数完全一样、内容全错
+（表现为 `✗ [937.CodeOffset] 取值不同：35796 vs 0`）。
+必须先把 `(jump, 目标段序号)` 收集起来，等所有段发射完再统一补。
+探针现在会额外列出「未打补丁的跳转」（CodeOffset 仍为 0 的），这类问题一眼可见。
+
+### 9. 启发式判定要严格，且会被自检反噬
+
+ubergraph 判定最初允许 `ComputedJump` 出现在前 4 条内，结果把自检里合成的
+「执行流」用例误判成 ubergraph，自检直接挂（测试反过来说明实现太宽）。
+收紧到「必须在前两条之内」才与 UE 的实际布局一致。
+**形状识别这类启发式，宁可漏判（退化成普通还原）也不要误判。**
+
 ## 十一、下一步（按收益排序）
 
-### 1. 剩下 7 个状态机函数的嵌套还原
+### 1. 剩下 3 个普通函数的共享尾部还原
 
-`ExecuteUbergraph_*` 这类函数用「Push/Pop 执行流 + 共享尾部」组织代码，线性配对规则表达不了。
+`setTimedOutAfterReconnect`、`TryToGoHome`、`ParseNotification`——它们不是 ubergraph，
+但同样是「Push/Pop 执行流 + 共享尾部」，线性配对规则表达不了。
 可行方向：先按跳转目标建基本块图（探针的「基本块」段已有现成代码），
 在块图上做支配关系分析，再把有唯一支配者的块合成 if/loop。
 不要继续加节点类型——类型已经够用，缺的是控制流分析。

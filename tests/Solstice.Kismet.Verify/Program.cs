@@ -267,5 +267,51 @@ var options = new DecompileOptions(Measure, ResolveImport);
         UberGraph.Analyze([new EX_Return { ReturnExpression = new EX_Nothing() }, new EX_EndOfScript()], uberOptions) is null);
 }
 
+// ---- 10. ubergraph 重新烘焙：跨段跳转必须指向前方段（回归：曾补丁成 0）----
+// 布局：[0]Push(5)@0 -> 31   [1]ComputedJump(6)@5   [2]IntConst(5)@11
+//       [3]Jump(5)@16 -> 21（前向跳到段 1）  [4]IntConst(5)@21
+//       [5]Jump(5)@26 -> 31（跳尾声）        [6]Return(1)@31   [7]EndOfScript(1)@32
+{
+    static uint UberMeasure2(KismetExpression x) => x switch
+    {
+        EX_PushExecutionFlow => 5,
+        EX_ComputedJump => 6,
+        EX_IntConst or EX_Jump => 5,
+        _ => 1
+    };
+
+    var exprs = new KismetExpression[]
+    {
+        new EX_PushExecutionFlow { PushingAddress = 31 },
+        new EX_ComputedJump { CodeOffsetExpression = new EX_IntConst { Value = 11 } },
+        new EX_IntConst { Value = 1 },
+        new EX_Jump { CodeOffset = 21 },
+        new EX_IntConst { Value = 2 },
+        new EX_Jump { CodeOffset = 31 },
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var uberOptions2 = new DecompileOptions(UberMeasure2, ResolveImport, null);
+    var nodes = KismetDecompiler.Decompile(exprs, uberOptions2);
+
+    Check("ubergraph 烘焙: 顶层是 UberGraphNode", nodes[0] is UberGraphNode, nodes[0].GetType().Name);
+
+    var uberNode = nodes[0] as UberGraphNode;
+    Check("ubergraph 烘焙: 段数", uberNode?.Sections.Count == 2, $"{uberNode?.Sections.Count}");
+    Check("ubergraph 烘焙: 前向跳转记到段序号",
+        uberNode?.Sections[0] is { Terminator: UberTerminator.JumpToOtherSection, TargetOrdinal: 1 });
+
+    var rebuilt = KismetCompiler.CompileToExpressions(
+        nodes, new CompileContext(Measure: UberMeasure2));
+
+    Check("ubergraph 烘焙: 前向跳转目标重算", rebuilt[3] is EX_Jump { CodeOffset: 21 },
+        $"{((rebuilt[3] as EX_Jump)?.CodeOffset)}");
+    Check("ubergraph 烘焙: 尾声跳转重算", rebuilt[5] is EX_Jump { CodeOffset: 31 },
+        $"{((rebuilt[5] as EX_Jump)?.CodeOffset)}");
+    Check("ubergraph 烘焙: Push 指向尾声", rebuilt[0] is EX_PushExecutionFlow { PushingAddress: 31 },
+        $"{((rebuilt[0] as EX_PushExecutionFlow)?.PushingAddress)}");
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;

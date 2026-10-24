@@ -665,6 +665,94 @@ public static class KismetCompiler
                     });
                     break;
 
+                case UberGraphNode uber:
+                {
+                    // 按段顺序重新烘焙：调度头 → 各段（段尾单独发）→ 尾声。
+                    // 所有跳转目标按新布局重算，所以入口偏移会变，调用方要拿新的写回 UClass。
+                    var sectionStart = new int[uber.Sections.Count];
+                    var epilogueJumps = new List<KismetExpression>();
+                    var sectionJumps = new List<(EX_Jump Jump, int Ordinal)>();
+                    EX_PushExecutionFlow? push = null;
+
+                    if (uber.PushesEpilogue)
+                    {
+                        push = new EX_PushExecutionFlow();
+                        result.Add(push);
+                    }
+
+                    result.Add(new EX_ComputedJump { CodeOffsetExpression = ToExpr(uber.DispatchExpression) });
+
+                    for (var i = 0; i < uber.Sections.Count; i++)
+                    {
+                        var section = uber.Sections[i];
+                        sectionStart[i] = result.Count;
+
+                        foreach (var n in section.Nodes)
+                        {
+                            EmitNode(n);
+                        }
+
+                        switch (section.Terminator)
+                        {
+                            case UberTerminator.JumpToEpilogue:
+                            {
+                                var jump = new EX_Jump();
+                                result.Add(jump);
+                                epilogueJumps.Add(jump);
+                                break;
+                            }
+
+                            case UberTerminator.JumpToOtherSection:
+                            {
+                                var jump = new EX_Jump();
+                                result.Add(jump);
+                                if (section.TargetOrdinal is { } ord && ord >= 0 && ord < sectionStart.Length)
+                                {
+                                    // 目标段可能在后面，起始下标还没算出来——留到全部段发完再统一打补丁
+                                    sectionJumps.Add((jump, ord));
+                                }
+                                else
+                                {
+                                    throw new InvalidOperationException(
+                                        $"ubergraph 段 #{i} 的跨段跳转缺少目标段（TargetOrdinal={section.TargetOrdinal}）");
+                                }
+
+                                break;
+                            }
+
+                            case UberTerminator.PopExecutionFlow:
+                                result.Add(new EX_PopExecutionFlow());
+                                break;
+
+                            case UberTerminator.PopExecutionFlowIfNot:
+                                result.Add(new EX_PopExecutionFlowIfNot
+                                {
+                                    BooleanExpression = section.Condition is { } cond ? ToExpr(cond) : new EX_Nothing()
+                                });
+                                break;
+                        }
+                    }
+
+                    // 尾声就在这一段之后（外层紧接着发声明的 Return）
+                    var epilogueIndex = result.Count;
+                    foreach (var jump in epilogueJumps)
+                    {
+                        patches.Add((jump, epilogueIndex));
+                    }
+
+                    foreach (var (jump, ord) in sectionJumps)
+                    {
+                        patches.Add((jump, sectionStart[ord]));
+                    }
+
+                    if (push is not null)
+                    {
+                        patches.Add((push, epilogueIndex));
+                    }
+
+                    break;
+                }
+
                 case KismetDecompiler.RawNode raw:
                     // 未归类的表达式（如孤立的 EX_Jump）原样发回去，
                     // 丢掉会让后面所有指令错位。
@@ -709,6 +797,10 @@ public static class KismetCompiler
                 else if (jump is EX_JumpIfNot jn2)
                 {
                     jn2.CodeOffset = value;
+                }
+                else if (jump is EX_PushExecutionFlow pf)
+                {
+                    pf.PushingAddress = value;
                 }
             }
         }

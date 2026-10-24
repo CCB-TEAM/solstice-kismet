@@ -30,7 +30,8 @@ public sealed record UberSection(
     uint EndOffset,
     IReadOnlyList<KNode> Nodes,
     UberTerminator Terminator,
-    uint? BranchTarget);
+    uint? BranchTarget,
+    KArg? TerminatorCondition = null);
 
 /// <summary>
 /// Ubergraph（<c>ExecuteUbergraph_*</c>）的结构分析。
@@ -52,6 +53,7 @@ public sealed record UberGraphAnalysis(
     int DispatchIndex,
     bool PushesEpilogue,
     uint EpilogueOffset,
+    int EpilogueIndex,
     IReadOnlyList<UberSection> Sections,
     IReadOnlyList<string> Notes);
 
@@ -73,9 +75,11 @@ public static class UberGraph
             acc += options.Measure(bytecode[i]);
         }
 
-        // 调度头：EX_ComputedJump（可能前面还有一条 EX_PushExecutionFlow 登记尾声）
+        // 调度头：EX_ComputedJump（可能前面还有一条 EX_PushExecutionFlow 登记尾声）。
+        // 必须出现在最前面两条之内——UE 的 ubergraph 调度头永远在函数开头，
+        // 放宽松会把普通函数里的 ComputedJump 误判成 ubergraph。
         var dispatchIndex = -1;
-        for (var i = 0; i < Math.Min(4, bytecode.Count); i++)
+        for (var i = 0; i < Math.Min(2, bytecode.Count); i++)
         {
             if (bytecode[i] is EX_ComputedJump)
             {
@@ -155,8 +159,17 @@ public static class UberGraph
             }
 
             var last = bytecode[to - 1];
-            var terminator = TerminatorOf(last, epilogueOffset, out var targetOffset) ?? UberTerminator.FallsThrough;
-            sections.Add(MakeSection(bytecode, options, offsets, k, from, to, terminator, targetOffset));
+            var terminator = TerminatorOf(last, epilogueOffset, out var targetOffset);
+
+            // 终止符单独存在段尾，不进段体——否则回编译会把它发两遍
+            var bodyEnd = terminator is null ? to : to - 1;
+            var condition = (last as EX_PopExecutionFlowIfNot) is { } popIfNot
+                ? KismetDecompiler.ArgOf(popIfNot.BooleanExpression, options)
+                : null;
+
+            sections.Add(MakeSection(
+                bytecode, options, offsets, k, from, bodyEnd, to,
+                terminator ?? UberTerminator.FallsThrough, targetOffset, condition));
         }
 
         return new UberGraphAnalysis(
@@ -164,6 +177,7 @@ public static class UberGraph
             dispatchIndex,
             pushesEpilogue,
             epilogueOffset,
+            epilogueIndex,
             sections,
             notes);
     }
@@ -211,17 +225,19 @@ public static class UberGraph
         uint[] offsets,
         int ordinal,
         int from,
+        int bodyEnd,
         int toExclusive,
         UberTerminator terminator,
-        uint? target)
+        uint? target,
+        KArg? condition)
     {
-        var slice = new List<KismetExpression>(toExclusive - from);
-        for (var i = from; i < toExclusive; i++)
+        var slice = new List<KismetExpression>(Math.Max(0, bodyEnd - from));
+        for (var i = from; i < bodyEnd; i++)
         {
             slice.Add(bytecode[i]);
         }
 
-        var body = KismetDecompiler.Decompile(slice, options, offsets[from]);
+        var body = slice.Count == 0 ? [] : KismetDecompiler.Decompile(slice, options, offsets[from]);
         return new UberSection(
             ordinal,
             from,
@@ -229,6 +245,7 @@ public static class UberGraph
             toExclusive < offsets.Length ? offsets[toExclusive] : offsets[^1],
             body,
             terminator,
-            target);
+            target,
+            condition);
     }
 }

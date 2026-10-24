@@ -410,6 +410,37 @@ public sealed record PopFlowIfNotNode(KArg Condition) : KNode($"PopFlowIfNot {Ar
 public sealed record SetArrayNode(KArg Target, FPackageIndex Inner, IReadOnlyList<KArg> Elements)
     : KNode($"SetArray {ArgRender.Of(Target)}[{Elements.Count}]");
 
+/// <summary>
+/// ubergraph 的一个入口段。
+///
+/// <para>
+/// 「展开」后的产物：一段就是蓝图里的一个事件（或一个基本块），
+/// 段尾由 <see cref="Terminator"/> 决定怎么离开——跳尾声、回执行流栈、或跳到另一段。
+/// </para>
+/// </summary>
+public sealed record UberSectionNode(
+    uint StartOffset,
+    IReadOnlyList<KNode> Nodes,
+    UberTerminator Terminator,
+    int? TargetOrdinal = null,
+    KArg? Condition = null)
+    : KNode($"Section @{StartOffset} {Terminator}{(TargetOrdinal is { } t ? $" -> #{t}" : "")}");
+
+/// <summary>
+/// 整个 ubergraph：调度头 + 各入口段 + 尾声。
+///
+/// <para>
+/// <b>入口表不在字节码里</b>，所以这里记的 <c>StartOffset</c> 只是原布局的偏移。
+/// 重新烘焙时按 <see cref="Sections"/> 的顺序生成、所有跳转目标重算，
+/// 新的入口偏移由调用方写回 UClass 的事件引用。
+/// </para>
+/// </summary>
+public sealed record UberGraphNode(
+    KArg DispatchExpression,
+    bool PushesEpilogue,
+    IReadOnlyList<UberSectionNode> Sections)
+    : KNode($"UberGraph ({Sections.Count} 段)");
+
 /// <summary>把参数渲染成简短可读文本，只用于节点标题。</summary>
 internal static class ArgRender
 {
