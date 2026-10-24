@@ -29,12 +29,17 @@ public sealed record DecompileOptions(
 /// </summary>
 public static class KismetDecompiler
 {
+    /// <param name="baseOffset">
+    /// 这段字节码在原函数里的起始偏移。递归反编译切片时必须传，
+    /// 否则 EX_Jump/EX_JumpIfNot 里存的是绝对偏移，切完就对不上了。
+    /// </param>
     public static IReadOnlyList<KNode> Decompile(
         IReadOnlyList<KismetExpression> expressions,
-        DecompileOptions? options = null)
+        DecompileOptions? options = null,
+        uint baseOffset = 0)
     {
         options ??= new DecompileOptions();
-        var offsets = BuildOffsets(expressions, options.Measure);
+        var offsets = BuildOffsets(expressions, options.Measure, baseOffset);
 
         var nodes = new List<KNode>();
         var i = 0;
@@ -241,7 +246,7 @@ public static class KismetDecompiler
                             ?? throw new InvalidOperationException(
                                 $"分支条件表达式 {jumpIfNot.BooleanExpression?.Inst} 暂不支持");
 
-            var plainBody = Decompile(Slice(expressions, start + 1, exit), options);
+            var plainBody = Decompile(Slice(expressions, start + 1, exit), options, offsets[start + 1]);
             var plainNext = exit;
             while (plainNext < expressions.Count && expressions[plainNext] is EX_Nothing)
             {
@@ -260,11 +265,11 @@ public static class KismetDecompiler
         // 回跳到起点之前 → 循环
         if (backTarget >= 0 && backTarget <= start)
         {
-            var loopBody = Decompile(Slice(expressions, start + 1, jumpIndex), options);
+            var loopBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, offsets[start + 1]);
             return new Block(new LoopNode(cond, loopBody), exit);
         }
 
-        var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options);
+        var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, offsets[start + 1]);
 
         // 结构的真正结束点是 Jump 的目标——它可能越过 JumpIfNot 的落点。
         // 用 exit 当结束点会把中间那段代码整段丢掉。
@@ -273,7 +278,7 @@ public static class KismetDecompiler
             : exit;
 
         var elseBody = structureEnd > jumpIndex + 1
-            ? Decompile(Slice(expressions, jumpIndex + 1, structureEnd), options)
+            ? Decompile(Slice(expressions, jumpIndex + 1, structureEnd), options, offsets[jumpIndex + 1])
             : null;
 
         var node = new IfNode(cond, thenBody, elseBody);
@@ -300,7 +305,7 @@ public static class KismetDecompiler
 
     // ---- 偏移表 ----
 
-    private static uint[]? BuildOffsets(IReadOnlyList<KismetExpression> expressions, Func<KismetExpression, uint>? measure)
+    private static uint[]? BuildOffsets(IReadOnlyList<KismetExpression> expressions, Func<KismetExpression, uint>? measure, uint baseOffset = 0)
     {
         if (measure is null)
         {
@@ -308,7 +313,7 @@ public static class KismetDecompiler
         }
 
         var offsets = new uint[expressions.Count];
-        uint acc = 0;
+        uint acc = baseOffset;
         for (var i = 0; i < expressions.Count; i++)
         {
             offsets[i] = acc;
