@@ -1,4 +1,5 @@
 using UAssetAPI.Kismet.Bytecode;
+using UAssetAPI.UnrealTypes;
 
 namespace Solstice.Kismet;
 
@@ -87,13 +88,31 @@ public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool
 /// <summary>布尔字面量，对应 EX_True / EX_False。</summary>
 public sealed record BoolArg(bool Value) : KArg(PinType.Bool);
 
-/// <summary>调用的形态（由签名与归属推断，不需要用户选）。</summary>
+/// <summary>名字字面量，对应 EX_NameConst。</summary>
+public sealed record NameArg(FName Value) : KArg(PinType.String);
+
+/// <summary>
+/// 调用的指令形态。
+///
+/// <para>
+/// <b>不要从 flags 推断。</b>UE 的判定在
+/// <c>KismetCompilerVMBackend.cpp</c> 里，是六个条件的合取，其中
+/// <c>GetCallerTargetsUnsupportedByCallee</c>（构建目标兼容性）在 jmap 函数表里根本不存在，
+/// 无法完整复现。所以形态是**保留**的：反编译看到哪个就记哪个，回编译原样发回去。
+/// </para>
+/// </summary>
 public enum CallShape
 {
-    /// <summary>EX_FinalFunction：静态函数，StackNode 指向 Import。</summary>
+    /// <summary>EX_FinalFunction：native 的 final 函数。</summary>
     Final,
 
-    /// <summary>EX_LocalVirtualFunction：本资产函数，按 FName 调用。</summary>
+    /// <summary>EX_LocalFinalFunction：非 native 的 final 函数（脚本函数）。</summary>
+    LocalFinal,
+
+    /// <summary>EX_CallMath：纯运算符式调用，不需要 context。</summary>
+    Math,
+
+    /// <summary>EX_LocalVirtualFunction：按 FName 调本资产函数。</summary>
     Virtual,
 
     /// <summary>EX_Context：实例函数，需要对象上下文。</summary>
@@ -113,8 +132,9 @@ public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then) : KNode("
 
 public sealed record ReturnNode() : KNode("Return");
 
-/// <summary>赋值：把常量写进一个已有变量。</summary>
-public sealed record AssignNode(string VariableName, KArg Value) : KNode($"Set {VariableName}");
+/// <summary>赋值：把值写进一个变量。</summary>
+public sealed record AssignNode(string VariableName, KArg Value, PointerArg? TargetPointer = null)
+    : KNode($"Set {VariableName}");
 
 /// <summary>
 /// 跨对象调用：在某个对象上调用函数（编译成 EX_Context + EX_FinalFunction）。
@@ -143,8 +163,16 @@ public sealed record ContextCallNode(
 public sealed record VirtualCallNode(string Function, IReadOnlyList<KArg> Args)
     : KNode($"Virtual {Function}");
 
+/// <summary>非 native 的 final 函数调用，编译成 EX_LocalFinalFunction。</summary>
+public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args)
+    : KNode($"LocalFinal {Function}");
+
+/// <summary>运算符式调用，编译成 EX_CallMath（不需要 context）。</summary>
+public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args)
+    : KNode($"Math {Function}");
+
 /// <summary>布尔赋值：编译成 EX_LetBool（VariableExpression + AssignmentExpression）。</summary>
-public sealed record AssignBoolNode(string VariableName, KArg Value)
+public sealed record AssignBoolNode(string VariableName, KArg Value, PointerArg? TargetPointer = null)
     : KNode($"Set {VariableName}");
 
 /// <summary>

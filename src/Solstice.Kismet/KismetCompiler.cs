@@ -162,26 +162,33 @@ public static class KismetCompiler
                     // 复用现有字节码里的属性指针：FFieldPath 自带变量名与归属索引
                     return new EX_LocalVariable { Variable = pointer };
 
+                case NameArg n:
+                    return new EX_NameConst { Value = n.Value };
+
                 case CallArg c:
                 {
                     var inner = c.Args.Select(ToExpr).ToArray();
+                    var stack = functions is not null && functions.TryGetValue(c.Function, out var fi)
+                        ? fi
+                        : new FPackageIndex(0);
 
-                    if (c.Shape == CallShape.Virtual && resolveName is not null)
+                    switch (c.Shape)
                     {
-                        return new EX_LocalVirtualFunction
-                        {
-                            VirtualFunctionName = resolveName(c.Function),
-                            Parameters = inner
-                        };
+                        case CallShape.Math:
+                            return new EX_CallMath { StackNode = stack, Parameters = inner };
+
+                        case CallShape.LocalFinal:
+                            return new EX_LocalFinalFunction { StackNode = stack, Parameters = inner };
+
+                        case CallShape.Virtual when resolveName is not null:
+                            return new EX_LocalVirtualFunction
+                            {
+                                VirtualFunctionName = resolveName(c.Function),
+                                Parameters = inner
+                            };
                     }
 
-                    var final = new EX_FinalFunction
-                    {
-                        StackNode = functions is not null && functions.TryGetValue(c.Function, out var fi)
-                            ? fi
-                            : new FPackageIndex(0),
-                        Parameters = inner
-                    };
+                    var final = new EX_FinalFunction { StackNode = stack, Parameters = inner };
 
                     if (c.Shape == CallShape.Context
                         && c.ObjectVariable is { } objVar
@@ -229,15 +236,23 @@ public static class KismetCompiler
                     result.Add(new EX_Nothing());
                     break;
 
-                case AssignNode a when variables is not null && variables.TryGetValue(a.VariableName, out var ap):
+                case AssignNode a:
+                {
+                    var pointer = a.TargetPointer?.Pointer
+                        ?? (variables is not null && variables.TryGetValue(a.VariableName, out var ap) ? ap : null);
+                    if (pointer is null) { throw new InvalidOperationException($"赋值目标 {a.VariableName} 没有可用的属性指针"); }
+
                     // EX_Let 需要 Value（指针）与 Variable（表达式）同时给
                     result.Add(new EX_Let
                     {
-                        Value = ap,
-                        Variable = new EX_LocalVariable { Variable = ap },
-                        Expression = KismetExprBuilder.ToExpression(a.Value, variables)
+                        Value = pointer,
+                        Variable = a.TargetPointer is { Instance: true }
+                            ? new EX_InstanceVariable { Variable = pointer }
+                            : new EX_LocalVariable { Variable = pointer },
+                        Expression = ToExpr(a.Value)
                     });
                     break;
+                }
 
                 case ContextCallNode cc
                     when variables is not null && variables.TryGetValue(cc.ObjectVariable, out var objPtr)
@@ -298,6 +313,24 @@ public static class KismetCompiler
                     });
                     break;
 
+                case MathCallNode mc when functions is not null && functions.TryGetValue(mc.Function, out var mathFn):
+                    // 运算符式调用：不需要 context
+                    result.Add(new EX_CallMath
+                    {
+                        StackNode = mathFn,
+                        Parameters = BuildArgs(new CallNode(mc.Function, mc.Args))
+                    });
+                    break;
+
+                case LocalFinalCallNode lf when functions is not null && functions.TryGetValue(lf.Function, out var localFn):
+                    // 非 native 的 final 函数（脚本函数）
+                    result.Add(new EX_LocalFinalFunction
+                    {
+                        StackNode = localFn,
+                        Parameters = BuildArgs(new CallNode(lf.Function, lf.Args))
+                    });
+                    break;
+
                 case LoopNode lp:
                 {
                     // 循环：条件 → JumpIfNot(退出) → 循环体 → Jump(回条件) → 退出落点
@@ -329,14 +362,22 @@ public static class KismetCompiler
                     break;
                 }
 
-                case AssignBoolNode ab when variables is not null && variables.TryGetValue(ab.VariableName, out var bp):
+                case AssignBoolNode ab:
+                {
+                    var pointer = ab.TargetPointer?.Pointer
+                        ?? (variables is not null && variables.TryGetValue(ab.VariableName, out var bp) ? bp : null);
+                    if (pointer is null) { throw new InvalidOperationException($"布尔赋值目标 {ab.VariableName} 没有可用的属性指针"); }
+
                     // EX_LetBool：变量用表达式表示（不像 EX_Let 还要单独的 Value 指针）
                     result.Add(new EX_LetBool
                     {
-                        VariableExpression = new EX_LocalVariable { Variable = bp },
+                        VariableExpression = ab.TargetPointer is { Instance: true }
+                            ? new EX_InstanceVariable { Variable = pointer }
+                            : new EX_LocalVariable { Variable = pointer },
                         AssignmentExpression = ToExpr(ab.Value)
                     });
                     break;
+                }
 
                 case ReturnNode:
                     result.Add(new EX_Return { ReturnExpression = new EX_Nothing() });

@@ -54,7 +54,7 @@ public static class KismetDecompiler
                     continue;
 
                 case EX_Let let:
-                    nodes.Add(new AssignNode(TargetName(let.Variable), ToArg(let.Expression, options) ?? new IntArg(0)));
+                    nodes.Add(new AssignNode(TargetName(let.Variable), ToArg(let.Expression, options) ?? new IntArg(0), PointerOf(let.Variable)));
                     i++;
                     continue;
 
@@ -88,6 +88,24 @@ public static class KismetDecompiler
                     nodes.Add(Raw(e));
                     i++;
                     continue;
+
+                // 注意：EX_LocalFinalFunction / EX_CallMath 都继承自 EX_FinalFunction，
+                // 必须排在它之前，否则永远匹配不到。
+                case EX_LocalFinalFunction localFinal:
+                {
+                    var lfName = options.ResolveImport?.Invoke(localFinal.StackNode) ?? $"<import {localFinal.StackNode?.Index}>";
+                    nodes.Add(new LocalFinalCallNode(lfName, ToArgs(localFinal.Parameters, options)));
+                    i++;
+                    continue;
+                }
+
+                case EX_CallMath math:
+                {
+                    var mathName = options.ResolveImport?.Invoke(math.StackNode) ?? $"<import {math.StackNode?.Index}>";
+                    nodes.Add(new MathCallNode(mathName, ToArgs(math.Parameters, options)));
+                    i++;
+                    continue;
+                }
 
                 case EX_FinalFunction final:
                 {
@@ -239,8 +257,19 @@ public static class KismetDecompiler
         EX_IntOne => new IntArg(1),
         EX_True => new BoolArg(true),
         EX_False => new BoolArg(false),
+        EX_NameConst nc => new NameArg(nc.Value),
         EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
         EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
+        // 注意：EX_LocalFinalFunction / EX_CallMath 都继承自 EX_FinalFunction，
+        // 必须排在 EX_FinalFunction 之前，否则永远匹配不到。
+        EX_LocalFinalFunction lf => new CallArg(
+            options.ResolveImport?.Invoke(lf.StackNode) ?? $"<import {lf.StackNode?.Index}>",
+            ToArgs(lf.Parameters, options),
+            CallShape.LocalFinal),
+        EX_CallMath cm => new CallArg(
+            options.ResolveImport?.Invoke(cm.StackNode) ?? $"<import {cm.StackNode?.Index}>",
+            ToArgs(cm.Parameters, options),
+            CallShape.Math),
         EX_FinalFunction f => new CallArg(
             options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>",
             ToArgs(f.Parameters, options),
@@ -282,8 +311,16 @@ public static class KismetDecompiler
         var target = TargetName(letBool.VariableExpression);
         // 赋值源可能是字面量，也可能是一次读变量/调用，必须原样保留
         var value = ToArg(letBool.AssignmentExpression, options) ?? new BoolArg(false);
-        return new AssignBoolNode(target, value);
+        return new AssignBoolNode(target, value, PointerOf(letBool.VariableExpression));
     }
+
+    /// <summary>把变量表达式还原成指针参数，供回编译原样使用。</summary>
+    private static PointerArg? PointerOf(KismetExpression? e) => e switch
+    {
+        EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
+        EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
+        _ => null
+    };
 
     /// <summary>从变量表达式里取出变量名（FFieldPath 的最后一段）。</summary>
     private static string TargetName(KismetExpression? expression)
