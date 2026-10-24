@@ -58,6 +58,7 @@ tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
 tools/KismetCoverage/  同进程批量覆盖率：一次扫完整个目录，输出失败原因聚类
 tests/Solstice.Kismet.Verify/  59 项自检
+samples/Usage/         可运行的用法示例（列函数/反编译/重烘/引脚/插入写回）
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 ```

@@ -3,3 +3,6 @@ obj/
 *.user
 .vs/
 
+
+.sample-work/
+*.sample-work-re/

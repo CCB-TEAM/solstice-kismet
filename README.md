@@ -67,6 +67,46 @@ var (ops2, hex2, _)    = ws.Generate(nodes, "ExecuteUbergraph_card_brawl_test1")
 var saved = ws.Save("/tmp/ws");   // 返回 uasset + uexp 两半，缺一不可
 ```
 
+## 跑一个真实示例
+
+`samples/Usage` 是可直接运行的用法示例（对着真实资产跑，不需要改代码）：
+
+```powershell
+dotnet run --project samples/Usage -- <asset.uasset> <usmap> [functions.json]
+```
+
+它依次演示：列函数 → 反编译 → ubergraph 重烘 → 看引脚 → 插入调用并写回 → 重新打开验证。
+对 `BP_Chat` 的实际输出：
+
+```
+资产: BP_Chat.uasset
+带字节码的函数: 25 个
+
+[1] 最小的有内容函数: Completed_142D2C9D48C8AD6C227A309EC236561B（4 条表达式）
+[2] 反编译得到 3 个节点:
+      SetPersistent K2Node_CustomEvent_Result
+      LocalFinal ExecuteUbergraph_BP_Chat
+      Return
+
+[3] ExecuteUbergraph_BP_Chat 重烘: 4 个入口, 尾声 off=1565
+
+[4] PlanCall(PrintString): shape=Final, owner=/Script/Engine.KismetSystemLibrary
+         WorldContextObject   ObjectProperty   in
+         InString             StrProperty      in
+         bPrintToScreen       BoolProperty     in
+         bPrintToLog          BoolProperty     in
+      ?? TextColor            StructProperty   in     ← 占位，需用户替换
+         Duration             FloatProperty    in
+         Key                  NameProperty     in
+
+[5] 往 Completed_... 插入 Greater_IntInt: 表达式 4 -> 5
+      写回 uasset 16937 字节 / uexp 20513 字节
+      重新打开后该函数 4 个节点（读回成功）
+```
+
+> `KismetWorkspace.Open` 需要一个**可写**工作目录（UAssetAPI 只能按路径构造），
+> 示例用当前目录下的 `.sample-work/`，已加进 `.gitignore`。
+
 ## 几个必须知道的编码事实
 
 这些都是实测出来的，猜错会导致生成的字节码引擎读不了。
