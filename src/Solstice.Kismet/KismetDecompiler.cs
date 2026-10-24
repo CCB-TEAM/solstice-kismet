@@ -124,6 +124,38 @@ public static class KismetDecompiler
                     i++;
                     continue;
 
+                // ---- 执行流栈：异步/延迟节点的「恢复点」机制 ----
+                // Push 只登记地址、不改变执行位置；Pop 才跳回去。
+                case EX_PushExecutionFlow push:
+                    nodes.Add(new PushFlowNode(push.PushingAddress));
+                    i++;
+                    continue;
+
+                case EX_PopExecutionFlow:
+                    nodes.Add(new PopFlowNode());
+                    i++;
+                    continue;
+
+                case EX_PopExecutionFlowIfNot popIfNot:
+                    nodes.Add(new PopFlowIfNotNode(RequireArg(popIfNot.BooleanExpression, options)));
+                    i++;
+                    continue;
+
+                case EX_ComputedJump computedJump:
+                    nodes.Add(new ComputedJumpNode(RequireArg(computedJump.CodeOffsetExpression, options)));
+                    i++;
+                    continue;
+
+                case EX_SetArray setArray:
+                    nodes.Add(new SetArrayNode(
+                        setArray.AssigningProperty is null
+                            ? new NoObjectArg()
+                            : RequireArg(setArray.AssigningProperty, options),
+                        setArray.ArrayInnerProp!,
+                        ToArgs(setArray.Elements, options)));
+                    i++;
+                    continue;
+
                 // 注意：EX_LocalFinalFunction / EX_CallMath / EX_CallMulticastDelegate
                 // 都继承自 EX_FinalFunction，必须排在它之前，否则永远匹配不到。
                 case EX_CallMulticastDelegate mcd:
@@ -269,6 +301,15 @@ public static class KismetDecompiler
             return null;
         }
 
+        // 落点越出当前片段：目标在更外层的代码里（共享尾部/状态机）。
+        // 这种情况无法用嵌套结构表达，硬猜只会让回编译的跳转偏移错位，
+        // 所以放弃结构化、把这条 JumpIfNot 原样保留——外层仍然可以继续还原。
+        if (exit >= expressions.Count)
+        {
+            options.Warn?.Invoke($"[{start}] JumpIfNot 目标越出片段（target={jumpIfNot.CodeOffset}），保留原文");
+            return null;
+        }
+
         // 体内第一条 EX_Jump 才标志着 then 分支结束（正序找，不是倒序）：
         //   Jump 落到 exit      → 没有 else
         //   Jump 落到别处      → then 结束，[jumpIndex+1, exit) 是 else 分支
@@ -312,7 +353,8 @@ public static class KismetDecompiler
                 plainNext++;
             }
 
-            return new Block(new IfNode(plainCond, plainBody), plainNext);
+            // 落点上原本有没有 EX_Nothing 决定回编译要不要补这一个占位字节
+            return new Block(new IfNode(plainCond, plainBody, null, plainNext > exit), plainNext);
         }
 
         var jump = (EX_Jump)expressions[jumpIndex];
@@ -325,7 +367,13 @@ public static class KismetDecompiler
         if (backTarget >= 0 && backTarget <= start)
         {
             var loopBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, OffAt(offsets, start + 1));
-            return new Block(new LoopNode(cond, loopBody), exit);
+            var loopNext = exit;
+            while (loopNext < expressions.Count && expressions[loopNext] is EX_Nothing)
+            {
+                loopNext++;
+            }
+
+            return new Block(new LoopNode(cond, loopBody, loopNext > exit), loopNext);
         }
 
         var thenBody = Decompile(Slice(expressions, start + 1, jumpIndex), options, OffAt(offsets, start + 1));
@@ -340,13 +388,13 @@ public static class KismetDecompiler
             ? Decompile(Slice(expressions, jumpIndex + 1, structureEnd), options, OffAt(offsets, jumpIndex + 1))
             : null;
 
-        var node = new IfNode(cond, thenBody, elseBody);
-
         var next = structureEnd;
         while (next < expressions.Count && expressions[next] is EX_Nothing)
         {
             next++;
         }
+
+        var node = new IfNode(cond, thenBody, elseBody, next > structureEnd);
 
         return new Block(node, next);
     }
@@ -434,6 +482,19 @@ public static class KismetDecompiler
         EX_ObjToInterfaceCast ic => new InterfaceCastArg(
             ToArg(ic.Target, options) ?? new NoObjectArg(),
             ic.ClassPtr),
+        EX_MetaCast metaCast => new MetaCastArg(
+            ToArg(metaCast.Target, options) ?? new NoObjectArg(),
+            metaCast.ClassPtr),
+        EX_ArrayGetByRef arrayGet => new ArrayGetByRefArg(
+            RequireArg(arrayGet.ArrayVariable, options),
+            RequireArg(arrayGet.ArrayIndex, options)),
+        EX_UnicodeStringConst unicode => new UnicodeStringArg(unicode.Value),
+        EX_InstanceDelegate instanceDelegate => new InstanceDelegateArg(instanceDelegate.FunctionName),
+        EX_TransformConst transform => new TransformArg(transform.Value),
+        EX_MapConst mapConst => new MapConstArg(
+            mapConst.KeyProperty!,
+            mapConst.ValueProperty!,
+            ToArgs(mapConst.Elements, options)),
         // 包装层必须保留：脱掉会让回编译少 1 字节（EX_InterfaceContext 的 token）
         EX_InterfaceContext icx => new InterfaceContextArg(RequireArg(icx.InterfaceValue, options)),
         EX_Int64Const la => new LongArg(la.Value),
@@ -454,6 +515,7 @@ public static class KismetDecompiler
         EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
         EX_LocalOutVariable lo => new PointerArg(lo.Variable!, TargetName(lo), Out: true),
         EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
+        EX_DefaultVariable dv => new PointerArg(dv.Variable!, TargetName(dv), Default: true),
         // 注意：EX_LocalFinalFunction / EX_CallMath 都继承自 EX_FinalFunction，
         // 必须排在 EX_FinalFunction 之前，否则永远匹配不到。
         EX_CallMulticastDelegate mcd => new CallArg(
@@ -497,18 +559,21 @@ public static class KismetDecompiler
     {
         var objName = TargetName(ctx.ObjectExpression);
         var objArg = ToArg(ctx.ObjectExpression, options);
+        var kind = KindOf(ctx);
 
         switch (ctx.ContextExpression)
         {
             case EX_LocalVirtualFunction v:
                 return new CallArg(
                     v.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(v.Parameters, options),
-                    CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.Virtual);
+                    CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.Virtual,
+                    ContextKind: kind);
 
             case EX_VirtualFunction vf:
                 return new CallArg(
                     vf.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(vf.Parameters, options),
-                    CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.VirtualGlobal);
+                    CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.VirtualGlobal,
+                    ContextKind: kind);
 
             case EX_FinalFunction f:
             {
@@ -519,12 +584,18 @@ public static class KismetDecompiler
                 return new CallArg(
                     options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>",
                     ToArgs(f.Parameters, options),
-                    CallShape.Context, objName, f.StackNode, objArg, ctx.RValuePointer, inner);
+                    CallShape.Context, objName, f.StackNode, objArg, ctx.RValuePointer, inner,
+                    ContextKind: kind);
             }
 
             case EX_InstanceVariable iv:
                 // 跨对象读成员：ContextExpression 是变量而不是调用
-                return new ContextMemberArg(objArg ?? new NoObjectArg(), TargetName(iv), iv.Variable!);
+                return new ContextMemberArg(objArg ?? new NoObjectArg(), TargetName(iv), iv.Variable!, Kind: kind);
+
+            case EX_DefaultVariable dv:
+                // 读的是类默认对象（CDO）上的默认值，形态和实例变量一样但指令不同
+                return new ContextMemberArg(
+                    objArg ?? new NoObjectArg(), TargetName(dv), dv.Variable!, IsDefault: true, Kind: kind);
 
             default:
                 options.Warn?.Invoke($"ContextExpression 类型 {ctx.ContextExpression?.Inst} 未处理");
@@ -571,6 +642,14 @@ public static class KismetDecompiler
         return path is { Length: > 0 } ? path[^1].ToString() : "?";
     }
 
+    /// <summary>三种 EX_Context 形态只差令牌，还原时要记住是哪一种。</summary>
+    private static ContextKind KindOf(EX_Context ctx) => ctx switch
+    {
+        EX_ClassContext => ContextKind.ClassContext,
+        EX_Context_FailSilent => ContextKind.FailSilent,
+        _ => ContextKind.Normal
+    };
+
     /// <summary>
     /// 把 EX_Context 还原成 ContextCallNode。
     /// ContextExpression 的形态决定 InnerShape——它不一定都是 EX_FinalFunction。
@@ -579,13 +658,15 @@ public static class KismetDecompiler
     {
         var objName = TargetName(ctx.ObjectExpression);
         var objArg = ToArg(ctx.ObjectExpression, options);
+        var kind = KindOf(ctx);
 
         switch (ctx.ContextExpression)
         {
             case EX_LocalVirtualFunction v:
                 return new ContextCallNode(
                     objName, v.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(v.Parameters, options),
-                    ObjectArg: objArg, RValuePointer: ctx.RValuePointer, InnerShape: CallShape.Virtual);
+                    ObjectArg: objArg, RValuePointer: ctx.RValuePointer, InnerShape: CallShape.Virtual,
+                    ContextKind: kind);
 
             case EX_FinalFunction f:
             {
@@ -596,7 +677,8 @@ public static class KismetDecompiler
                 var name = options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>";
                 return new ContextCallNode(
                     objName, name, ToArgs(f.Parameters, options),
-                    ObjectArg: objArg, RValuePointer: ctx.RValuePointer, InnerShape: shape);
+                    ObjectArg: objArg, RValuePointer: ctx.RValuePointer, InnerShape: shape,
+                    StackNode: f.StackNode, ContextKind: kind);
             }
 
             default:
@@ -618,6 +700,7 @@ public static class KismetDecompiler
         EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
         EX_LocalOutVariable lo => new PointerArg(lo.Variable!, TargetName(lo), Out: true),
         EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
+        EX_DefaultVariable dv => new PointerArg(dv.Variable!, TargetName(dv), Default: true),
         _ => null
     };
 
@@ -635,6 +718,7 @@ public static class KismetDecompiler
             EX_LocalVariable lv => lv.Variable,
             EX_LocalOutVariable lo => lo.Variable,
             EX_InstanceVariable iv => iv.Variable,
+            EX_DefaultVariable dv => dv.Variable,
             _ => null
         };
 

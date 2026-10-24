@@ -98,10 +98,13 @@ var options = new DecompileOptions(Measure, ResolveImport);
 }
 
 // ---- 4. loop 结构（回跳）----
+// 偏移: [0]0 [1]5 [2]10 [3]15 [4]16 [5]17
+// JumpIfNot 落点必须落在偏移表内（15 = 第 3 条）。写 20 这种越界值等于造假的字节码：
+// 真实资产里落点越界意味着目标在更外层，反编译器会（正确地）放弃结构化。
 {
     var exprs = new KismetExpression[]
     {
-        new EX_JumpIfNot { CodeOffset = 20, BooleanExpression = new EX_True() },
+        new EX_JumpIfNot { CodeOffset = 15, BooleanExpression = new EX_True() },
         new EX_FinalFunction { StackNode = new FPackageIndex(-19), Parameters = [] },
         new EX_Jump { CodeOffset = 0 },   // 跳回起点 → 循环
         new EX_Nothing(),
@@ -112,6 +115,7 @@ var options = new DecompileOptions(Measure, ResolveImport);
     var nodes = KismetDecompiler.Decompile(exprs, options);
     Check("loop: 首节点是循环", nodes[0] is LoopNode, nodes[0].GetType().Name);
     Check("loop: 体内一条", nodes[0] is LoopNode lp && lp.Body.Count == 1);
+    Check("loop: 记录落点占位", nodes[0] is LoopNode { EndsWithNothing: true });
 }
 
 // ---- 5. 没有 measure 时不炸，跳转退化为原文 ----
@@ -158,6 +162,61 @@ var options = new DecompileOptions(Measure, ResolveImport);
     Check("接口上下文: 回编译仍是 EX_InterfaceContext", param is EX_InterfaceContext, param?.Inst);
     Check("接口上下文: 内层对象常量未丢",
         param is EX_InterfaceContext { InterfaceValue: EX_ObjectConst { Value.Index: -5 } });
+}
+
+// ---- 7. 执行流栈 / 计算跳转 / 数组赋值：从 Raw 提升成可读节点后仍要字节一致 ----
+{
+    var exprs = new KismetExpression[]
+    {
+        new EX_PushExecutionFlow { PushingAddress = 209 },
+        new EX_PopExecutionFlowIfNot { BooleanExpression = new EX_True() },
+        new EX_ComputedJump { CodeOffsetExpression = new EX_IntConst { Value = 3 } },
+        new EX_PopExecutionFlow(),
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var nodes = KismetDecompiler.Decompile(exprs, options);
+    Check("执行流: Push 还原成节点", nodes[0] is PushFlowNode { Target: 209 }, nodes[0].GetType().Name);
+    Check("执行流: Push 标题带偏移", nodes[0].Title.Contains("209"), nodes[0].Title);
+    Check("执行流: PopIfNot 保留条件", nodes[1] is PopFlowIfNotNode { Condition: BoolArg { Value: true } });
+    Check("计算跳转: 还原成节点", nodes[2] is ComputedJumpNode { Target: IntArg { Value: 3 } }, nodes[2].Title);
+    Check("执行流: Pop 还原成节点", nodes[3] is PopFlowNode);
+
+    var rebuilt = KismetCompiler.CompileToExpressions(nodes, CompileContext.Empty);
+    Check("执行流: 回编译 Push 偏移不变",
+        rebuilt[0] is EX_PushExecutionFlow { PushingAddress: 209 });
+    Check("执行流: 回编译 PopIfNot 条件不变",
+        rebuilt[1] is EX_PopExecutionFlowIfNot { BooleanExpression: EX_True });
+    Check("计算跳转: 回编译目标不变",
+        rebuilt[2] is EX_ComputedJump { CodeOffsetExpression: EX_IntConst { Value: 3 } });
+    Check("执行流: 回编译 Pop 不变", rebuilt[3] is EX_PopExecutionFlow);
+}
+
+// ---- 8. EX_SetArray：元素与内层索引都要原样带回 ----
+{
+    var exprs = new KismetExpression[]
+    {
+        new EX_SetArray
+        {
+            AssigningProperty = new EX_ObjectConst { Value = new FPackageIndex(-4) },
+            ArrayInnerProp = new FPackageIndex(-7),
+            Elements = [new EX_IntConst { Value = 11 }, new EX_IntConst { Value = 22 }]
+        },
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var nodes = KismetDecompiler.Decompile(exprs, options);
+    var setArray = nodes[0] as SetArrayNode;
+    Check("数组赋值: 还原成节点", setArray is not null, nodes[0].GetType().Name);
+    Check("数组赋值: 元素个数", setArray?.Elements.Count == 2, $"{setArray?.Elements.Count}");
+
+    var rebuilt = KismetCompiler.CompileToExpressions(nodes, CompileContext.Empty);
+    var back = rebuilt[0] as EX_SetArray;
+    Check("数组赋值: 回编译内层索引不变", back?.ArrayInnerProp?.Index == -7, $"{back?.ArrayInnerProp?.Index}");
+    Check("数组赋值: 回编译元素不变",
+        back?.Elements is [EX_IntConst { Value: 11 }, EX_IntConst { Value: 22 }]);
 }
 
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");

@@ -150,8 +150,46 @@ public static class KismetCompiler
         /// <summary>变量表达式的三种形态：局部 / 实例 / 函数输出参数。</summary>
         static KismetExpression TargetExpr(PointerArg? kind, KismetPropertyPointer pointer)
             => kind is { Out: true } ? new EX_LocalOutVariable { Variable = pointer }
+             : kind is { Default: true } ? new EX_DefaultVariable { Variable = pointer }
              : kind is { Instance: true } ? new EX_InstanceVariable { Variable = pointer }
              : new EX_LocalVariable { Variable = pointer };
+
+        /// <summary>
+        /// 按保留的形态构造 EX_Context 系列。三者字段完全相同、只有令牌不同，
+        /// 发错令牌字节就对不上。
+        /// </summary>
+        KismetExpression MakeContext(
+            ContextKind kind,
+            KismetExpression objectExpression,
+            KismetExpression inner,
+            KismetPropertyPointer pointer)
+        {
+            var offset = measure?.Invoke(inner) ?? 0;
+            return kind switch
+            {
+                ContextKind.ClassContext => new EX_ClassContext
+                {
+                    ObjectExpression = objectExpression,
+                    ContextExpression = inner,
+                    RValuePointer = pointer,
+                    Offset = offset
+                },
+                ContextKind.FailSilent => new EX_Context_FailSilent
+                {
+                    ObjectExpression = objectExpression,
+                    ContextExpression = inner,
+                    RValuePointer = pointer,
+                    Offset = offset
+                },
+                _ => new EX_Context
+                {
+                    ObjectExpression = objectExpression,
+                    ContextExpression = inner,
+                    RValuePointer = pointer,
+                    Offset = offset
+                }
+            };
+        }
 
         KismetExpression ToExpr(KArg arg)
         {
@@ -181,14 +219,11 @@ public static class KismetCompiler
 
                 case ContextMemberArg cm:
                 {
-                    var member = new EX_InstanceVariable { Variable = cm.Pointer };
-                    return new EX_Context
-                    {
-                        ObjectExpression = ToExpr(cm.Object),
-                        ContextExpression = member,
-                        RValuePointer = cm.Pointer,
-                        Offset = measure?.Invoke(member) ?? 0
-                    };
+                    // CDO 默认值读取用 EX_DefaultVariable，普通成员用 EX_InstanceVariable
+                    KismetExpression member = cm.IsDefault
+                        ? new EX_DefaultVariable { Variable = cm.Pointer }
+                        : new EX_InstanceVariable { Variable = cm.Pointer };
+                    return MakeContext(cm.Kind, ToExpr(cm.Object), member, cm.Pointer);
                 }
 
                 case DoubleArg d:
@@ -227,6 +262,37 @@ public static class KismetCompiler
                     return new EX_InterfaceContext
                     {
                         InterfaceValue = ToExpr(icx.Value)
+                    };
+
+                case MetaCastArg mc:
+                    return new EX_MetaCast
+                    {
+                        ClassPtr = mc.ClassPtr,
+                        Target = ToExpr(mc.Target)
+                    };
+
+                case ArrayGetByRefArg ag:
+                    return new EX_ArrayGetByRef
+                    {
+                        ArrayVariable = ToExpr(ag.Array),
+                        ArrayIndex = ToExpr(ag.Index)
+                    };
+
+                case UnicodeStringArg us:
+                    return new EX_UnicodeStringConst { Value = us.Value };
+
+                case InstanceDelegateArg idl:
+                    return new EX_InstanceDelegate { FunctionName = idl.FunctionName };
+
+                case TransformArg tr:
+                    return new EX_TransformConst { Value = tr.Value };
+
+                case MapConstArg mpc:
+                    return new EX_MapConst
+                    {
+                        KeyProperty = mpc.Key,
+                        ValueProperty = mpc.Value,
+                        Elements = mpc.Elements.Select(ToExpr).ToArray()
                     };
 
                 case LongArg la:
@@ -328,15 +394,11 @@ public static class KismetCompiler
                         return call;
                     }
 
-                    return new EX_Context
-                    {
-                        ObjectExpression = c.ObjectArg is { } oa
-                            ? ToExpr(oa)
-                            : new EX_LocalVariable { Variable = objPtr },
-                        ContextExpression = call,
-                        RValuePointer = objPtr,
-                        Offset = measure?.Invoke(call) ?? 0
-                    };
+                    return MakeContext(
+                        c.ContextKind,
+                        c.ObjectArg is { } oa ? ToExpr(oa) : new EX_LocalVariable { Variable = objPtr },
+                        call,
+                        objPtr);
                 }
 
                 default:
@@ -399,9 +461,10 @@ public static class KismetCompiler
                         throw new InvalidOperationException($"跨对象调用 {cc.Function} 缺少 RValuePointer");
                     }
 
-                    // ContextExpression 的形态由 InnerShape 决定，不一定都是 FinalFunction
+                    // ContextExpression 的形态由 InnerShape 决定，不一定都是 FinalFunction。
+                    // StackNode 必须用反编译保留的那个：同名导入可能有多个，按名字查会取错索引。
                     var ctxArgs = BuildArgs(new CallNode(cc.Function, cc.Args));
-                    var ctxStack = StackOf(cc.Function, null);
+                    var ctxStack = StackOf(cc.Function, cc.StackNode);
 
                     KismetExpression inner = cc.InnerShape switch
                     {
@@ -415,16 +478,11 @@ public static class KismetCompiler
                         _ => new EX_FinalFunction { StackNode = ctxStack, Parameters = ctxArgs }
                     };
 
-                    result.Add(new EX_Context
-                    {
-                        // 对象可以是变量，也可以是另一个调用/取成员的结果
-                        ObjectExpression = cc.ObjectArg is { } oa
-                            ? ToExpr(oa)
-                            : new EX_LocalVariable { Variable = objPtr },
-                        ContextExpression = inner,
-                        RValuePointer = objPtr,
-                        Offset = measure?.Invoke(inner) ?? 0
-                    });
+                    result.Add(MakeContext(
+                        cc.ContextKind,
+                        cc.ObjectArg is { } oa ? ToExpr(oa) : new EX_LocalVariable { Variable = objPtr },
+                        inner,
+                        objPtr));
                     break;
                 }
 
@@ -435,30 +493,47 @@ public static class KismetCompiler
 
                     var jn = new EX_JumpIfNot { BooleanExpression = cond };
                     result.Add(jn);
-                    var elseIdx = result.Count;
 
                     foreach (var n in f.Then)
                     {
                         EmitNode(n);
                     }
 
-                    var j = new EX_Jump();
-                    result.Add(j);
-
-                    // else 落点（jn 跳到这里）；有 else 体就紧接着发射
                     if (f.Else is { Count: > 0 } elseNodes)
                     {
+                        // if/else：条件为假跳到 else 起点，then 结束后跳过 else
+                        //   跳目标必须在 then 体**之后**取，否则会跳到 then 体上
+                        var j = new EX_Jump();
+                        result.Add(j);
+
+                        var elseIdx = result.Count;
                         foreach (var n in elseNodes)
                         {
                             EmitNode(n);
                         }
+
+                        var endIdx = result.Count;
+                        if (f.EndsWithNothing)
+                        {
+                            result.Add(new EX_Nothing()); // 原字节码里本来就有的落点占位
+                        }
+
+                        patches.Add((jn, elseIdx));
+                        patches.Add((j, endIdx));
+                    }
+                    else
+                    {
+                        // 无 else：条件为假直接落到 then 体之后。
+                        // UE 这里**不会**再补一个 EX_Jump，补了就是 5 个多余字节。
+                        var exitIdx = result.Count;
+                        if (f.EndsWithNothing)
+                        {
+                            result.Add(new EX_Nothing());
+                        }
+
+                        patches.Add((jn, exitIdx));
                     }
 
-                    var endIdx = result.Count;
-                    result.Add(new EX_Nothing()); // end 落点
-
-                    patches.Add((jn, elseIdx));
-                    patches.Add((j, endIdx));
                     break;
                 }
 
@@ -516,7 +591,10 @@ public static class KismetCompiler
                     var back = new EX_Jump();
                     result.Add(back);
                     var afterIdx = result.Count;
-                    result.Add(new EX_Nothing()); // 退出落点
+                    if (lp.EndsWithNothing)
+                    {
+                        result.Add(new EX_Nothing());
+                    }
 
                     patches.Add((jn, afterIdx));
                     patches.Add((back, startIdx)); // 反向跳回条件处
@@ -557,6 +635,33 @@ public static class KismetCompiler
                     {
                         DestinationProperty = pa.Destination,
                         AssignmentExpression = ToExpr(pa.Value)
+                    });
+                    break;
+
+                case ComputedJumpNode cj:
+                    result.Add(new EX_ComputedJump { CodeOffsetExpression = ToExpr(cj.Target) });
+                    break;
+
+                case PushFlowNode pf:
+                    // 登记的字节偏移原样发回：节点顺序不变时它就是对的，
+                    // 变了会被 DecompileVerified 的字节比对拦住，不会静默写错。
+                    result.Add(new EX_PushExecutionFlow { PushingAddress = pf.Target });
+                    break;
+
+                case PopFlowNode:
+                    result.Add(new EX_PopExecutionFlow());
+                    break;
+
+                case PopFlowIfNotNode pif:
+                    result.Add(new EX_PopExecutionFlowIfNot { BooleanExpression = ToExpr(pif.Condition) });
+                    break;
+
+                case SetArrayNode sa:
+                    result.Add(new EX_SetArray
+                    {
+                        AssigningProperty = ToExpr(sa.Target),
+                        ArrayInnerProp = sa.Inner,
+                        Elements = sa.Elements.Select(ToExpr).ToArray()
                     });
                     break;
 

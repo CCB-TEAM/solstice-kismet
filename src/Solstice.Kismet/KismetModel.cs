@@ -82,7 +82,12 @@ public sealed record LocalArg(string Name) : KArg(PinType.Int);
 /// <summary>
 /// 原样保留的属性指针。反编译时用它，避免多段 FFieldPath / ResolvedOwner 被压平成名字后丢失信息。
 /// </summary>
-public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool Instance = false, bool Out = false)
+public sealed record PointerArg(
+    KismetPropertyPointer Pointer,
+    string Name,
+    bool Instance = false,
+    bool Out = false,
+    bool Default = false)
     : KArg(PinType.Object);
 
 /// <summary>布尔字面量，对应 EX_True / EX_False。</summary>
@@ -108,6 +113,28 @@ public sealed record DynamicCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(
 
 /// <summary>转成接口，对应 EX_ObjToInterfaceCast（EX_CastBase）。</summary>
 public sealed record InterfaceCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(PinType.Object);
+
+/// <summary>元类转换（类引用之间的转换），对应 EX_MetaCast（EX_CastBase）。</summary>
+public sealed record MetaCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(PinType.Object);
+
+/// <summary>按引用取数组元素，对应 EX_ArrayGetByRef（数组表达式 + 索引表达式）。</summary>
+public sealed record ArrayGetByRefArg(KArg Array, KArg Index) : KArg(PinType.Object);
+
+/// <summary>UTF-16 字符串字面量，对应 EX_UnicodeStringConst（含非 ASCII 时用它）。</summary>
+public sealed record UnicodeStringArg(string Value) : KArg(PinType.String);
+
+/// <summary>函数/委托实例引用，对应 EX_InstanceDelegate（只有 FName）。</summary>
+public sealed record InstanceDelegateArg(FName FunctionName) : KArg(PinType.Object);
+
+/// <summary>变换字面量，对应 EX_TransformConst。</summary>
+public sealed record TransformArg(FTransform Value) : KArg(PinType.Struct);
+
+/// <summary>Map 字面量，对应 EX_MapConst（两个内层属性指针 + 元素）。</summary>
+public sealed record MapConstArg(
+    KismetPropertyPointer Key,
+    KismetPropertyPointer Value,
+    IReadOnlyList<KArg> Elements)
+    : KArg(PinType.Struct);
 
 /// <summary>
 /// 接口上下文，对应 EX_InterfaceContext（只有子表达式，没有其他字段）。
@@ -150,7 +177,12 @@ public sealed record StructConstArg(FPackageIndex Struct, int Size, IReadOnlyLis
 /// 跨对象读成员，对应 EX_Context + EX_InstanceVariable。
 /// EX_Context 的 ContextExpression 不一定都是调用。
 /// </summary>
-public sealed record ContextMemberArg(KArg Object, string Member, KismetPropertyPointer Pointer)
+public sealed record ContextMemberArg(
+    KArg Object,
+    string Member,
+    KismetPropertyPointer Pointer,
+    bool IsDefault = false,
+    ContextKind Kind = ContextKind.Normal)
     : KArg(PinType.Object);
 
 /// <summary>空对象字面量，对应 EX_NoObject。</summary>
@@ -206,6 +238,22 @@ public enum CallShape
     Context
 }
 
+/// <summary>
+/// <c>EX_Context</c> 的三种形态。它们操作数完全相同，但令牌不同，
+/// 回编译必须发回原来那一个，否则字节就对不上。
+/// </summary>
+public enum ContextKind
+{
+    /// <summary>EX_Context：普通对象上下文。</summary>
+    Normal,
+
+    /// <summary>EX_ClassContext：上下文是类默认对象（CDO）。</summary>
+    ClassContext,
+
+    /// <summary>EX_Context_FailSilent：上下文为空时静默跳过（只用于无返回值函数）。</summary>
+    FailSilent
+}
+
 /// <summary>以另一个调用的返回值作为参数。</summary>
 public sealed record CallArg(
     string Function,
@@ -216,7 +264,8 @@ public sealed record CallArg(
     KArg? ObjectArg = null,
     KismetPropertyPointer? RValuePointer = null,
     CallShape InnerShape = CallShape.Final,
-    KArg? Delegate = null)
+    KArg? Delegate = null,
+    ContextKind ContextKind = ContextKind.Normal)
     : KArg(PinType.Object);
 
 /// <summary>多播委托调用，编译成 EX_CallMulticastDelegate。</summary>
@@ -232,7 +281,11 @@ public abstract record KNode(string Title);
 
 public sealed record CallNode(string Function, IReadOnlyList<KArg> Args, string? Owner = null, FPackageIndex? StackNode = null) : KNode(Function);
 
-public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then, IReadOnlyList<KNode>? Else = null)
+public sealed record IfNode(
+    KArg Condition,
+    IReadOnlyList<KNode> Then,
+    IReadOnlyList<KNode>? Else = null,
+    bool EndsWithNothing = false)
     : KNode("If");
 
 public sealed record ReturnNode(KArg? Value = null) : KNode("Return");
@@ -261,7 +314,9 @@ public sealed record ContextCallNode(
     string? Owner = null,
     KArg? ObjectArg = null,
     KismetPropertyPointer? RValuePointer = null,
-        CallShape InnerShape = CallShape.Final)
+        CallShape InnerShape = CallShape.Final,
+    FPackageIndex? StackNode = null,
+    ContextKind ContextKind = ContextKind.Normal)
     : KNode($"{ObjectVariable}.{Function}");
 
 /// <summary>
@@ -316,4 +371,60 @@ public sealed record PersistentAssignNode(KismetPropertyPointer Destination, KAr
 /// 循环：条件为真时反复执行循环体。
 /// 编译成 条件 → JumpIfNot(退出) → 循环体 → Jump(跳回条件) → 退出落点。
 /// </summary>
-public sealed record LoopNode(KArg Condition, IReadOnlyList<KNode> Body) : KNode("Loop");
+public sealed record LoopNode(
+    KArg Condition,
+    IReadOnlyList<KNode> Body,
+    bool EndsWithNothing = false)
+    : KNode("Loop");
+
+/// <summary>
+/// 算出来的跳转目标，对应 <c>EX_ComputedJump</c>。
+///
+/// <para>
+/// 和 <c>EX_Jump</c> 不同：目标不是常量偏移，而是一个表达式（通常是整数常量或变量）。
+/// 蓝图里的分发器（按状态跳到对应分支）就靠它。
+/// </para>
+/// </summary>
+public sealed record ComputedJumpNode(KArg Target) : KNode($"JumpTo {ArgRender.Of(Target)}");
+
+/// <summary>
+/// 把「以后回到这里」压进执行流栈，对应 <c>EX_PushExecutionFlow</c>。
+///
+/// <para>
+/// 它<b>不改变</b>当前执行位置（这点和 <c>EX_Jump</c> 相反），只是登记一个恢复点；
+/// 之后遇到 <see cref="PopFlowNode"/> 才会跳回去。异步/延迟节点（Delay、Timeline）依赖它。
+/// </para>
+/// </summary>
+public sealed record PushFlowNode(uint Target) : KNode($"PushFlow -> {Target}");
+
+/// <summary>跳到执行流栈顶登记的地址，对应 <c>EX_PopExecutionFlow</c>。</summary>
+public sealed record PopFlowNode() : KNode("PopFlow");
+
+/// <summary>条件不成立时才跳回执行流栈顶，对应 <c>EX_PopExecutionFlowIfNot</c>（Delay 的等待循环）。</summary>
+public sealed record PopFlowIfNotNode(KArg Condition) : KNode($"PopFlowIfNot {ArgRender.Of(Condition)}");
+
+/// <summary>
+/// 给数组赋值（把元素写进已有数组变量），对应 <c>EX_SetArray</c>。
+/// 注意区别于 <c>EX_ArrayConst</c>——那只是字面量。
+/// </summary>
+public sealed record SetArrayNode(KArg Target, FPackageIndex Inner, IReadOnlyList<KArg> Elements)
+    : KNode($"SetArray {ArgRender.Of(Target)}[{Elements.Count}]");
+
+/// <summary>把参数渲染成简短可读文本，只用于节点标题。</summary>
+internal static class ArgRender
+{
+    public static string Of(KArg? arg) => arg switch
+    {
+        null => "?",
+        IntArg i => i.Value.ToString(),
+        BoolArg b => b.Value ? "true" : "false",
+        LocalArg l => l.Name,
+        PointerArg p => p.Name,
+        StringArg s => $"\"{s.Value}\"",
+        NameArg n => n.Value.ToString(),
+        ObjectArg o => $"<obj {o.Value.Index}>",
+        NoObjectArg => "<none>",
+        SelfArg => "this",
+        _ => arg.GetType().Name.Replace("Arg", "")
+    };
+}
