@@ -182,6 +182,52 @@ public static class KismetDecompiler
     }
 
     /// <summary>
+    /// 反编译并自校验：结构化还原的结果回编译后若与原始字节不符，
+    /// 自动退回扁平模式（纯指令、不还原 if/loop）。
+    ///
+    /// <para>
+    /// 字节一致性是硬要求，可读结构是附加价值——所以结构还原失败时宁可退化成平铺，
+    /// 也不能产出与原始字节不同的结果。
+    /// </para>
+    /// </summary>
+    /// <param name="originalBytes">原始字节码序列化后的字节，用作比对基准。</param>
+    /// <param name="recompile">把节点列表重新编译成字节，由调用方提供（需要资产上下文）。</param>
+    public static IReadOnlyList<KNode> DecompileVerified(
+        IReadOnlyList<KismetExpression> expressions,
+        byte[] originalBytes,
+        DecompileOptions? options,
+        Func<IReadOnlyList<KNode>, byte[]> recompile,
+        uint baseOffset = 0)
+    {
+        options ??= new DecompileOptions();
+
+        if (!options.Flatten)
+        {
+            var structured = Decompile(expressions, options, baseOffset);
+            byte[] rebuilt;
+            try
+            {
+                rebuilt = recompile(structured);
+            }
+            catch (Exception ex)
+            {
+                options.Warn?.Invoke($"结构化还原回编译失败，退回扁平模式：{ex.Message}");
+                return Decompile(expressions, options with { Flatten = true }, baseOffset);
+            }
+
+            if (rebuilt.AsSpan().SequenceEqual(originalBytes))
+            {
+                return structured;
+            }
+
+            options.Warn?.Invoke(
+                $"结构化还原结果与原始字节不符（{rebuilt.Length} vs {originalBytes.Length}），退回扁平模式");
+        }
+
+        return Decompile(expressions, options with { Flatten = true }, baseOffset);
+    }
+
+    /// <summary>
     /// 未识别/未归类的表达式。回编译时**原样发回去**——
     /// 丢掉会让后面所有指令错位，比保留更糟。
     /// </summary>

@@ -125,7 +125,14 @@ var options = new DecompileOptions(
     Warn: m => Console.WriteLine("[warn] " + m),
     Flatten: Environment.GetEnvironmentVariable("KISMET_FLATTEN") == "1");
 
-var nodes = KismetDecompiler.Decompile(bytecode, options);
+var vars0 = ExpressionWalker.BuildVariableIndex(bytecode);
+var funcs0 = ImportIndex.BuildFunctionIndex(asset);
+var origBytes0 = Serialize(bytecode, asset);
+
+// 结构化还原 + 自校验：不符就自动退回扁平模式
+var nodes = KismetDecompiler.DecompileVerified(bytecode, origBytes0, options,
+    ns => Serialize(KismetCompiler.CompileToExpressions(
+        ns, vars0, funcs0, e => e.GetSize(asset), nm => new FName(asset, nm)), asset));
 Console.WriteLine();
 Console.WriteLine($"=== 反编译（{nodes.Count} 个节点）===");
 foreach (var node in nodes)
