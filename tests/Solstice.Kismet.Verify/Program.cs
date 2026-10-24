@@ -219,5 +219,53 @@ var options = new DecompileOptions(Measure, ResolveImport);
         back?.Elements is [EX_IntConst { Value: 11 }, EX_IntConst { Value: 22 }]);
 }
 
+// ---- 9. Ubergraph 结构分析：调度头 + 基本块 + 尾声 ----
+// 布局（自定尺寸）：
+//   [0] Push(5)@0      -> 尾声 31
+//   [1] ComputedJump(6)@5
+//   [2] IntConst(5)@11     ┐ 段 0
+//   [3] Jump(5)@16 -> 31   ┘ (JumpToEpilogue)
+//   [4] IntConst(5)@21     ┐ 段 1（被 [5] 的跳转指向，所以是 leader）
+//   [5] Jump(5)@26 -> 21   ┘ (JumpToOtherSection)
+//   [6] Return(1)@31        尾声
+//   [7] EndOfScript(1)@32
+{
+    static uint UberMeasure(KismetExpression x) => x switch
+    {
+        EX_PushExecutionFlow => 5,
+        EX_ComputedJump => 6,
+        EX_IntConst or EX_Jump => 5,
+        _ => 1
+    };
+
+    var uberOptions = new DecompileOptions(UberMeasure, ResolveImport, null);
+
+    var exprs = new KismetExpression[]
+    {
+        new EX_PushExecutionFlow { PushingAddress = 31 },
+        new EX_ComputedJump { CodeOffsetExpression = new EX_IntConst { Value = 11 } },
+        new EX_IntConst { Value = 1 },
+        new EX_Jump { CodeOffset = 31 },
+        new EX_IntConst { Value = 2 },
+        new EX_Jump { CodeOffset = 21 },
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var uber = UberGraph.Analyze(exprs, uberOptions);
+    Check("ubergraph: 识别调度头", uber?.DispatchIndex == 1, $"{uber?.DispatchIndex}");
+    Check("ubergraph: 调度表达式", uber?.DispatchExpression is IntArg { Value: 11 });
+    Check("ubergraph: Push 登记尾声", uber is { PushesEpilogue: true, EpilogueOffset: 31 });
+    Check("ubergraph: 基本块个数", uber?.Sections.Count == 2, $"{uber?.Sections.Count}");
+    Check("ubergraph: 段 0 结束于尾声",
+        uber?.Sections[0] is { Terminator: UberTerminator.JumpToEpilogue, StartOffset: 11 });
+    Check("ubergraph: 段 1 是跨段跳转",
+        uber?.Sections[1] is { Terminator: UberTerminator.JumpToOtherSection, BranchTarget: 21 });
+
+    // 不是 ubergraph 的函数不应该被误判
+    Check("ubergraph: 普通函数不误判",
+        UberGraph.Analyze([new EX_Return { ReturnExpression = new EX_Nothing() }, new EX_EndOfScript()], uberOptions) is null);
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;

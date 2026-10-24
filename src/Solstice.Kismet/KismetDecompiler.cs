@@ -459,6 +459,13 @@ public static class KismetDecompiler
 
     // ---- 表达式 → 参数 ----
 
+    /// <summary>
+    /// 把任意表达式转成可嵌套的实参（<see cref="ToArg"/> 的公开入口）。
+    /// 供 ubergraph 分析这类只需要「读一个子表达式」的场景使用。
+    /// </summary>
+    public static KArg? ArgOf(KismetExpression? expression, DecompileOptions options)
+        => ToArg(expression, options);
+
     private static KArg? ToArg(KismetExpression? e, DecompileOptions options) => e switch
     {
         null => null,

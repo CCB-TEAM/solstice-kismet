@@ -135,6 +135,27 @@ var vars0 = ExpressionWalker.BuildVariableIndex(bytecode);
 var funcs0 = ImportIndex.BuildFunctionIndex(asset);
 var origBytes0 = Serialize(bytecode, asset);
 
+// Ubergraph 结构分析（只读）：调度头 + 入口段 + 尾声
+var uber = UberGraph.Analyze(bytecode, options);
+if (uber is not null)
+{
+    Console.WriteLine();
+    Console.WriteLine("=== Ubergraph 结构 ===");
+    Console.WriteLine($"  调度头      : [{uber.DispatchIndex}] ComputedJump {Arg(uber.DispatchExpression ?? new NoObjectArg())}");
+    Console.WriteLine($"  尾声        : off={uber.EpilogueOffset}" + (uber.PushesEpilogue ? "（由 PushExecutionFlow 登记）" : "（段尾直接 Jump 过来）"));
+    Console.WriteLine($"  入口段      : {uber.Sections.Count} 个");
+    foreach (var s in uber.Sections)
+    {
+        Console.WriteLine($"    #{s.Ordinal,-3} [{s.StartIndex,4}..] off={s.StartOffset,-6} 节点={s.Nodes.Count,-3} 结束={s.Terminator}" +
+                          (s.BranchTarget is { } t ? $" -> {t}" : ""));
+    }
+
+    foreach (var note in uber.Notes)
+    {
+        Console.WriteLine($"  [note] {note}");
+    }
+}
+
 // 结构化还原 + 自校验：不符就自动退回扁平模式
 var nodes = KismetDecompiler.DecompileVerified(bytecode, origBytes0, options,
     ns => Serialize(KismetCompiler.CompileToExpressions(
