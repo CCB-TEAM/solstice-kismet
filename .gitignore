@@ -12,3 +12,4 @@ obj/
 .msg.tmp
 .msg.tmp.txt
 .sample-work*/
+.kismet-mcp/
