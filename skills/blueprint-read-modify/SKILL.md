@@ -256,9 +256,10 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
   动段内布局会让这些常量整体错位（`ComputedJump` 跳进指令中间）。
   `KismetWorkspace` 会校验并在错位时回滚/拒绝写盘，但**不要绕过它直接改字节码**
 - `StructProperty` 的类型在 jmap 里 `class = null`：只知道"是结构体 + 字节大小"，不知道具体结构
-- **临时变量的声明只覆盖标量**：`withResult` 会给 `CallFunc_*` 补一条 `FProperty`（模板从资产里
-  同类型的现有属性克隆），但结构体 / 容器 / 对象类型只造指针、不声明——克隆模板会把别人的
-  `Struct` / `PropertyClass` / `Inner` 一起搬过来，那比不声明更糟
+- **临时变量按类型直接构造**：`withResult` 会给 `CallFunc_*` 补一条 `FProperty`——基础类型用
+  UAssetAPI 的 Property 子类 + 实测 `ElementSize`，对象/枚举用签名里的 class/enum 补导入。
+  结构体 / 容器 / 委托仍只造指针、不声明（jmap 里 `class = null`，拿不到结构或元素类型，
+  硬造出来是错的），`declaration` 字段会写明原因
 - **参数值只覆盖标量 + 变量 + 嵌套调用**：text / struct / array / map / set 仍需占位
 - **节点路径按当前反编译结果编号，不跨编辑稳定**：批量改动要先读完再改
 - **蓝图资产定义的结构（`S_*`）不在 usmap** 里，成员查不到

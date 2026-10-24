@@ -698,7 +698,7 @@ public sealed class KismetWorkspace
         }
 
         // 先声明再赋值：只造指针、不往属性表里加条目，运行时解析不到这个变量
-        var declaration = DeclareLocalVariable(functionName, name, returnType.Type);
+        var declaration = DeclareLocalVariable(functionName, name, returnType);
 
         var result = AssignCallResult(functionName, callee, name, args);
         return new InsertedCall(name, returnType, result.Opcodes, result.Hex, result.Bytes, declaration);
@@ -1257,13 +1257,21 @@ public sealed class KismetWorkspace
     ///
     /// <para>
     /// 只造 <c>FFieldPath</c> 指针是不够的：运行时是按指针去函数的属性表里解析的，
-    /// 表里没有这一条就解析不到。模板从资产里**同类型的现有属性**克隆——
-    /// 不猜 <c>ElementSize</c> / <c>PropertyFlags</c> 这些字段。
+    /// 表里没有这一条就解析不到。
+    /// </para>
+    ///
+    /// <para>
+    /// 属性按**类型直接构造**，不依赖资产里恰好有同类型的属性可克隆：
+    /// 基础类型（int / int64 / float / double / bool / byte / enum / str / name / text）用
+    /// UAssetAPI 对应的 Property 子类 + 实测的 <c>ElementSize</c>；
+    /// 对象类用签名里的 class 补一条类导入填 <c>PropertyClass</c>；
+    /// 枚举用签名里的 enum 补一条枚举导入填 <c>Enum</c> + <c>UnderlyingType</c>。
+    /// 结构体 / 容器 / 委托仍做不了——jmap 里 <c>class = null</c>，拿不到结构或元素类型。
     /// </para>
     ///
     /// <para>返回 null 表示成功；否则返回不能声明的原因（调用方决定是报错还是只警告）。</para>
     /// </summary>
-    public string? DeclareLocalVariable(string functionName, string variableName, string? propertyType)
+    public string? DeclareLocalVariable(string functionName, string variableName, FunctionParam? type)
     {
         var fn = FindFunction(functionName)
                  ?? throw new InvalidOperationException($"找不到函数: {functionName}");
@@ -1274,65 +1282,155 @@ public sealed class KismetWorkspace
             return null;
         }
 
+        var propertyType = type?.Type;
         if (string.IsNullOrEmpty(propertyType))
         {
             return $"不知道 {variableName} 的类型（被调函数没有返回值签名）";
         }
 
-        // 结构体 / 容器 / 对象：模板的 Struct / PropertyClass / Inner 可能是别的类型，克隆出来就是错的
-        if (propertyType is "StructProperty" or "ArrayProperty" or "MapProperty" or "SetProperty")
+        var property = CreateProperty(propertyType, type, variableName);
+        if (property is null)
         {
-            return $"{propertyType} 的临时变量需要正确的结构/容器类型，jmap 里拿不到，不自动声明";
-        }
-
-        if (propertyType is "ObjectProperty" or "ClassProperty" or "SoftObjectProperty")
-        {
-            return $"{propertyType} 的临时变量需要正确的 PropertyClass，不自动声明";
-        }
-
-        var template = FindPropertyTemplate(fn, propertyType);
-        if (template is null)
-        {
-            return $"资产里没有 {propertyType} 类型的属性可作模板";
-        }
-
-        var clone = CloneProperty(template);
-        clone.Name = new FName(_asset, variableName);
-        fn.LoadedProperties = [.. properties, clone];
-        return null;
-    }
-
-    /// <summary>找一个同类型的属性当模板：优先本函数，其次全资产。</summary>
-    private UAssetAPI.FieldTypes.FProperty? FindPropertyTemplate(FunctionExport fn, string propertyType)
-    {
-        static bool Matches(UAssetAPI.FieldTypes.FProperty p, string type)
-            => string.Equals(p.SerializedType?.Value?.Value, type, StringComparison.Ordinal);
-
-        var local = fn.LoadedProperties?.FirstOrDefault(p => Matches(p, propertyType));
-        if (local is not null)
-        {
-            return local;
-        }
-
-        foreach (var export in _asset.Exports.OfType<StructExport>())
-        {
-            var found = export.LoadedProperties?.FirstOrDefault(p => Matches(p, propertyType));
-            if (found is not null)
+            return propertyType switch
             {
-                return found;
-            }
+                "StructProperty" => "结构体的临时变量需要正确的 Struct 类型，jmap 里 class 为 null，不自动声明",
+                "ArrayProperty" or "MapProperty" or "SetProperty" =>
+                    $"{propertyType} 的临时变量需要元素类型，jmap 里拿不到，不自动声明",
+                "DelegateProperty" => "委托的临时变量需要签名函数，不自动声明",
+                _ => $"{propertyType} 没有对应的 Property 子类可构造"
+            };
         }
 
+        fn.LoadedProperties = [.. properties, property];
         return null;
     }
 
-    /// <summary>浅拷贝一个属性（只换名字；Write 只读字段，不共享可变状态）。</summary>
-    private static UAssetAPI.FieldTypes.FProperty CloneProperty(UAssetAPI.FieldTypes.FProperty source)
+    /// <summary>
+    /// 各 Property 类型的 <c>ElementSize</c>（实测自 KARDS 5.6 资产：BP_Logic 的 1600+ 条属性表）。
+    /// 结构体的尺寸随结构变化，不在此表内。
+    /// </summary>
+    private static readonly Dictionary<string, int> PropertyElementSizes = new(StringComparer.Ordinal)
     {
-        var method = typeof(object).GetMethod(
-            "MemberwiseClone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            ?? throw new InvalidOperationException("拿不到 MemberwiseClone");
-        return (UAssetAPI.FieldTypes.FProperty)method.Invoke(source, null)!;
+        ["IntProperty"] = 4,
+        ["Int64Property"] = 8,
+        ["FloatProperty"] = 4,
+        ["DoubleProperty"] = 8,
+        ["BoolProperty"] = 1,
+        ["ByteProperty"] = 1,
+        ["EnumProperty"] = 1,
+        ["StrProperty"] = 16,
+        ["NameProperty"] = 12,
+        ["TextProperty"] = 16,
+        ["ObjectProperty"] = 8,
+        ["ClassProperty"] = 8,
+        ["InterfaceProperty"] = 16,
+        ["SoftObjectProperty"] = 48,
+        ["SoftClassProperty"] = 48,
+        ["DelegateProperty"] = 32,
+        ["ArrayProperty"] = 16,
+        ["SetProperty"] = 80,
+        ["MapProperty"] = 80
+    };
+
+    /// <summary>按类型造一条属性；做不到时返回 null（原因由调用方给）。</summary>
+    private UAssetAPI.FieldTypes.FProperty? CreateProperty(string typeName, FunctionParam? type, string name)
+    {
+        if (!PropertyElementSizes.TryGetValue(typeName, out var elementSize))
+        {
+            return null;
+        }
+
+        UAssetAPI.FieldTypes.FProperty property = typeName switch
+        {
+            "BoolProperty" => new UAssetAPI.FieldTypes.FBoolProperty
+            {
+                FieldSize = 1,
+                ByteOffset = 0,
+                ByteMask = 1,
+                FieldMask = 255,
+                NativeBool = true,
+                Value = true
+            },
+            "ObjectProperty" => new UAssetAPI.FieldTypes.FObjectProperty
+            {
+                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+            },
+            "ClassProperty" => new UAssetAPI.FieldTypes.FClassProperty
+            {
+                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0),
+                MetaClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+            },
+            "SoftObjectProperty" => new UAssetAPI.FieldTypes.FSoftObjectProperty
+            {
+                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+            },
+            "SoftClassProperty" => new UAssetAPI.FieldTypes.FSoftClassProperty
+            {
+                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0),
+                MetaClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+            },
+            "InterfaceProperty" => new UAssetAPI.FieldTypes.FInterfaceProperty
+            {
+                InterfaceClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+            },
+            "ByteProperty" => new UAssetAPI.FieldTypes.FByteProperty
+            {
+                Enum = EnumIndexOf(type?.Enum) ?? new FPackageIndex(0)
+            },
+            "EnumProperty" => new UAssetAPI.FieldTypes.FEnumProperty
+            {
+                Enum = EnumIndexOf(type?.Enum) ?? new FPackageIndex(0),
+                UnderlyingProp = FinishProperty(
+                    new UAssetAPI.FieldTypes.FByteProperty(), "ByteProperty", 1, "UnderlyingType")
+            },
+            // 其余（int / int64 / float / double / str / name / text）UAssetAPI 没有专用子类，
+            // 读取时也是退化成 FGenericProperty——写出去必须保持一致
+            _ => new UAssetAPI.FieldTypes.FGenericProperty()
+        };
+
+        return FinishProperty(property, typeName, elementSize, name);
+    }
+
+    /// <summary>填公共字段。实测：局部临时变量一律 RF_Public + CPF_None + ArrayDim=TArray。</summary>
+    private UAssetAPI.FieldTypes.FProperty FinishProperty(
+        UAssetAPI.FieldTypes.FProperty property, string typeName, int elementSize, string name)
+    {
+        property.SerializedType = new FName(_asset, typeName);
+        property.Name = new FName(_asset, name);
+        property.Flags = EObjectFlags.RF_Public;
+        property.ArrayDim = UAssetAPI.FieldTypes.EArrayDim.TArray;
+        property.ElementSize = elementSize;
+        property.PropertyFlags = EPropertyFlags.CPF_None;
+        property.RepIndex = 0;
+        property.RepNotifyFunc = new FName(_asset, "None");
+        property.BlueprintReplicationCondition = UAssetAPI.FieldTypes.ELifetimeCondition.COND_None;
+        return property;
+    }
+
+    /// <summary>把签名里的类路径补成导入条目（<c>/Script/Engine.Actor</c> → Class 导入）。</summary>
+    private FPackageIndex? ClassIndexOf(string? classPath)
+    {
+        if (string.IsNullOrWhiteSpace(classPath))
+        {
+            return null;
+        }
+
+        var (packagePath, className) = ImportIndex.SplitOwner(classPath);
+        var package = ImportIndex.EnsurePackage(_asset, packagePath);
+        return ImportIndex.EnsureClass(_asset, className, package);
+    }
+
+    /// <summary>把签名里的枚举路径补成导入条目（<c>/Script/AIModule.EPathFollowingStatus</c> → Enum 导入）。</summary>
+    private FPackageIndex? EnumIndexOf(string? enumPath)
+    {
+        if (string.IsNullOrWhiteSpace(enumPath))
+        {
+            return null;
+        }
+
+        var (packagePath, enumName) = ImportIndex.SplitOwner(enumPath);
+        var package = ImportIndex.EnsurePackage(_asset, packagePath);
+        return ImportIndex.EnsureEnum(_asset, enumName, package);
     }
 
     // ---------------- 节点级编辑 ----------------

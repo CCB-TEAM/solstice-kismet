@@ -185,22 +185,32 @@ public static class ImportIndex
 
     /// <summary>确保类导入存在（cls=Class，outer=包）。</summary>
     public static FPackageIndex EnsureClass(UAsset asset, string className, FPackageIndex packageIndex)
+        => EnsureImportedObject(asset, className, packageIndex, "Class");
+
+    /// <summary>确保枚举导入存在（cls=Enum，outer=包）——枚举属性（FEnumProperty.Enum）要它。</summary>
+    public static FPackageIndex EnsureEnum(UAsset asset, string enumName, FPackageIndex packageIndex)
+        => EnsureImportedObject(asset, enumName, packageIndex, "Enum");
+
+    /// <summary>
+    /// 确保一个「包里的对象」导入存在。<paramref name="importClass"/> 是 Import 的 ClassName
+    /// （<c>Class</c> / <c>Enum</c> / …），按它找模板并克隆，不猜 ClassPackage。
+    /// </summary>
+    public static FPackageIndex EnsureImportedObject(
+        UAsset asset, string objectName, FPackageIndex packageIndex, string importClass)
     {
         for (var i = 0; i < asset.Imports.Count; i++)
         {
             var im = asset.Imports[i];
-            if (im.ClassName?.ToString() == "Class"
-                && im.ObjectName?.ToString() == className
+            if (im.ClassName?.ToString() == importClass
+                && im.ObjectName?.ToString() == objectName
                 && im.OuterIndex?.Index == packageIndex.Index)
             {
                 return new FPackageIndex(-(i + 1));
             }
         }
 
-        var template = FindTemplate(asset, "Class", null)
-            ?? throw new InvalidOperationException("资产里没有可作模板的类导入");
-
-        var clone = CloneAs(template, new FName(asset, className), packageIndex);
+        var template = FindTemplate(asset, importClass, null);
+        var clone = CloneAs(template, new FName(asset, objectName), packageIndex);
         asset.Imports.Add(clone);
         return new FPackageIndex(-asset.Imports.Count);
     }

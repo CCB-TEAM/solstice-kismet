@@ -93,7 +93,9 @@ dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --sel
 - 新增调用的**字节可读回**已验证（1,737/1,737 资产），**UE 运行时行为未验证**
 - `StructProperty` 的具体结构名在 jmap 里是 `null`，只能给到字节大小
 - 资产定义的结构（`S_*`）不在 usmap 里，查不到成员
-- **临时变量的声明只覆盖标量**（int / int64 / float / double / bool / byte / str / name）：
-  结构体 / 容器 / 对象类型的 `withResult` 只造指针、不声明（`declaration` 字段会写明原因），
-  因为克隆模板会把别人的 `Struct` / `PropertyClass` / `Inner` 一起搬过来
+- **临时变量的声明**：按类型**直接构造** `FProperty`（基础类型用 UAssetAPI 对应子类 +
+  实测 `ElementSize`；对象类用签名里的 class 补类导入填 `PropertyClass`；枚举补枚举导入填
+  `Enum` + `UnderlyingType`），公共字段是实测值（`RF_Public` + `CPF_None` + `ArrayDim=TArray`）。
+  **结构体 / 数组 / map / set / 委托仍不自动声明**——jmap 里 `class = null`，拿不到结构或元素类型，
+  硬造出来是错的；这时 `declaration` 字段会写明原因
 - 节点路径按「当前反编译结果」编号，**不跨编辑稳定**；批量改动请一次读完再改
