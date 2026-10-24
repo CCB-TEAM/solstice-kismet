@@ -83,6 +83,41 @@ for (var i = 0; i < bytecode.Length; i++)
 }
 Console.WriteLine($"  总计 {offset} 字节");
 
+// ---- 基本块划分：leader = 起始 / 跳转目标 / 跳转的下一条 ----
+var offs = new uint[bytecode.Length];
+uint acc2 = 0;
+for (var i2 = 0; i2 < bytecode.Length; i2++) { offs[i2] = acc2; acc2 += bytecode[i2].GetSize(asset); }
+
+int IdxOf(uint t) { for (var i2 = 0; i2 < offs.Length; i2++) if (offs[i2] >= t) return i2; return offs.Length; }
+
+var leaders = new SortedSet<int> { 0 };
+for (var i2 = 0; i2 < bytecode.Length; i2++)
+{
+    switch (bytecode[i2])
+    {
+        case EX_Jump j2:
+            leaders.Add(IdxOf(j2.CodeOffset));
+            leaders.Add(i2 + 1);
+            break;
+        case EX_JumpIfNot jn2:
+            leaders.Add(IdxOf(jn2.CodeOffset));
+            leaders.Add(i2 + 1);
+            break;
+    }
+}
+
+Console.WriteLine();
+Console.WriteLine($"=== 基本块（{leaders.Count} 个 leader）===");
+var leadList = leaders.Where(x => x <= bytecode.Length).ToArray();
+for (var i2 = 0; i2 < leadList.Length; i2++)
+{
+    var from = leadList[i2];
+    var to = i2 + 1 < leadList.Length ? leadList[i2 + 1] : bytecode.Length;
+    if (from >= bytecode.Length) continue;
+    var last = bytecode[to - 1];
+    Console.WriteLine($"  [{from,3}..{to - 1,3}] off={offs[from],-5} 结束于 {last.Inst}");
+}
+
 // ---- 2. 反编译 ----
 var options = new DecompileOptions(
     Measure: e => e.GetSize(asset),
