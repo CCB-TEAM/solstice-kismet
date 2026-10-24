@@ -229,9 +229,14 @@ $env:KISMET_FLATTEN='1'   # 强制扁平模式（不还原 if/loop）
 dotnet tools\KismetCoverage\bin\Debug\net10.0\KismetCoverage.dll <资产目录> <usmap> [--max N] [--verbose]
 ```
 
-输出：资产数 / 函数数 / 逐字节一致数 / 结构化退化数，以及**失败原因聚类**
-（`表达式 <op> 暂不支持`、`字节不一致 @offset 位于第 k 条 <op>`），失败样本最多 20 条。
+输出：资产数 / 函数数 / 逐字节一致数，以及**三种表示的分布**（树形 / 基本块图 / 扁平）
+和失败原因聚类（`表达式 <op> 暂不支持`、`字节不一致 @offset 位于第 k 条 <op>`）。
 扫一遍 `Cards` 约几分钟。
+
+加 `--workspace` 时改为**走 `KismetWorkspace` 门面**（`Open` → `Decompile`），
+验证主项目真正会用的那条路径（Import/Export 双向名字表、`CompileContext`、字节校验）。
+实测 `函数 8115，成功 8115，失败 0`。这个模式是门面代码唯一的实测入口——
+CI 机器上没有资产，自检跑不到它。
 
 用它测出的真实口径（2026-10）：
 

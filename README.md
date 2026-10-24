@@ -28,6 +28,14 @@ var ws = KismetWorkspace.Open(uassetBytes, uexpBytes, usmapBytes, "/tmp/ws");
 // 2. 可选：载入函数签名表（jmap 产物），用于自动构造插销与推断调用形态
 ws.AttachCatalog(FunctionCatalog.Load(functionsJson));
 
+// 2.5 反编译既有函数：结果一定是「树形 / ubergraph 展开 / 基本块图」之一，
+//     且已用字节比对校验过（校验不过会逐级退让，最终仍与原字节一致）
+var nodes0 = ws.Decompile("ExecuteUbergraph_BP_Chat");
+
+// ubergraph 还能重新烘焙，并拿回需要写回 UClass 事件引用的入口偏移表
+var baked = ws.BakeUbergraph("ExecuteUbergraph_BP_Chat");
+// baked.EntryOffsets / baked.EpilogueOffset
+
 // 3. 描述逻辑
 var nodes = new List<KNode>
 {

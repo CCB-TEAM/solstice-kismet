@@ -26,6 +26,7 @@ var usmapPath = args[1];
 var maxAssets = args.Length > 2 && args[2] == "--max" ? int.Parse(args[3]) : int.MaxValue;
 var verbose = args.Contains("--verbose");
 var showDegraded = args.Contains("--degraded");
+var useWorkspace = args.Contains("--workspace");
 
 if (!Directory.Exists(assetDir))
 {
@@ -39,7 +40,13 @@ var files = Directory.GetFiles(assetDir, "*.uasset", SearchOption.AllDirectories
     .Take(maxAssets)
     .ToArray();
 
-Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPath)}");
+Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPath)}" + (useWorkspace ? "（走 KismetWorkspace 门面）" : ""));
+
+if (useWorkspace)
+{
+    return RunWorkspace(files, usmapPath);
+}
+
 
 var total = 0;
 var passed = 0;
@@ -212,6 +219,74 @@ if (reasons.Count > 0)
 }
 
 return total == passed ? 0 : 1;
+
+// 走 KismetWorkspace 门面：验证主项目真正会用的那条路径
+// （Import/Export 双向名字表、CompileContext、字节校验）。
+static int RunWorkspace(string[] files, string usmapPath)
+{
+    var workDir = Path.Combine(Path.GetTempPath(), "kismet-coverage-" + Guid.NewGuid().ToString("N")[..8]);
+    var usmapBytes = File.ReadAllBytes(usmapPath);
+
+    var total = 0;
+    var ok = 0;
+    var failures = new List<string>();
+
+    foreach (var file in files)
+    {
+        var name = Path.GetFileNameWithoutExtension(file);
+        try
+        {
+            var uexp = Path.ChangeExtension(file, ".uexp");
+            if (!File.Exists(uexp))
+            {
+                continue;
+            }
+
+            var ws = KismetWorkspace.Open(
+                File.ReadAllBytes(file), File.ReadAllBytes(uexp), usmapBytes, workDir);
+
+            foreach (var fn in ws.Functions)
+            {
+                total++;
+                try
+                {
+                    // Decompile 内部已做字节校验；能返回就说明该表示是保真的
+                    var nodes = ws.Decompile(fn);
+                    if (nodes.Count == 0)
+                    {
+                        failures.Add($"{name} :: {fn} :: 反编译结果为空");
+                    }
+                    else
+                    {
+                        ok++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{name} :: {fn} :: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"{name} :: <asset> :: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    if (Directory.Exists(workDir))
+    {
+        Directory.Delete(workDir, true);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"门面路径: 函数 {total}，成功 {ok}，失败 {failures.Count}");
+    foreach (var f in failures.Take(20))
+    {
+        Console.WriteLine("  " + f);
+    }
+
+    return failures.Count == 0 ? 0 : 1;
+}
 
 static void Bump(Dictionary<string, int> map, string key)
 {

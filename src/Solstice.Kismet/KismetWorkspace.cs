@@ -115,6 +115,87 @@ public sealed class KismetWorkspace
         => Catalog?.Find(FunctionOwnerPath(functionName), functionName);
 
     /// <summary>
+    /// 把一个函数反编译成节点。
+    ///
+    /// <para>
+    /// 结果一定是三种可读表示之一：树形结构化 / ubergraph 展开 / 基本块图；
+    /// 且**已用字节比对校验过**——校验不通过会逐级退让，最终形态仍与原字节一致。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<KNode> Decompile(string functionName)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        var bytecode = fn.ScriptBytecode!;
+        var options = new DecompileOptions(
+            Measure: e => e.GetSize(_asset),
+            ResolveImport: idx => Names.TryGetValue(idx?.Index ?? 0, out var n) ? n : null);
+
+        var original = SerializeBytecode(bytecode);
+        return KismetDecompiler.DecompileVerified(
+            bytecode, original, options,
+            ns => SerializeBytecode(KismetCompiler.CompileToExpressions(ns, ContextOf(fn))));
+    }
+
+    /// <summary>
+    /// 重新烘焙 ubergraph 并返回新的入口偏移表。
+    /// 非 ubergraph 函数返回 null。
+    /// </summary>
+    public KismetCompiler.UbergraphBakeResult? BakeUbergraph(string functionName)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        return KismetCompiler.BakeUbergraph(Decompile(functionName), ContextOf(fn));
+    }
+
+    private CompileContext ContextOf(FunctionExport fn) => new(
+        ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!),
+        ImportIndex.BuildFunctionIndex(_asset),
+        e => e.GetSize(_asset),
+        n => new FName(_asset, n));
+
+    private byte[] SerializeBytecode(IReadOnlyList<KismetExpression> expressions)
+    {
+        using var ms = new MemoryStream();
+        var writer = new AssetBinaryWriter(ms, _asset);
+        foreach (var expression in expressions)
+        {
+            ExpressionSerializer.WriteExpression(expression, writer);
+        }
+
+        return ms.ToArray();
+    }
+
+    private Dictionary<int, string>? _names;
+
+    /// <summary>包索引 → 名字。负数为 Import，正数为本包 Export（ubergraph 段名靠它）。</summary>
+    private Dictionary<int, string> Names
+    {
+        get
+        {
+            if (_names is not null)
+            {
+                return _names;
+            }
+
+            _names = new Dictionary<int, string>();
+            for (var i = 0; i < _asset.Imports.Count; i++)
+            {
+                _names[-(i + 1)] = _asset.Imports[i].ObjectName?.ToString() ?? "";
+            }
+
+            for (var i = 0; i < _asset.Exports.Count; i++)
+            {
+                _names[i + 1] = _asset.Exports[i].ObjectName?.ToString() ?? "";
+            }
+
+            return _names;
+        }
+    }
+
+    /// <summary>
     /// 按节点 JSON 生成字节码并写回函数。
     /// 返回生成结果的指令名序列与序列化后的十六进制。
     /// </summary>
