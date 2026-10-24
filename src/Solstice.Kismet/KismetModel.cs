@@ -178,7 +178,12 @@ public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then, IReadOnly
 public sealed record ReturnNode() : KNode("Return");
 
 /// <summary>赋值：把值写进一个变量。</summary>
-public sealed record AssignNode(string VariableName, KArg Value, PointerArg? TargetPointer = null)
+public sealed record AssignNode(
+    string VariableName,
+    KArg Value,
+    PointerArg? TargetPointer = null,
+    KArg? TargetArg = null,
+    KismetPropertyPointer? ValuePointer = null)
     : KNode($"Set {VariableName}");
 
 /// <summary>

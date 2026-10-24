@@ -302,15 +302,23 @@ public static class KismetCompiler
 
                 case AssignNode a:
                 {
-                    var pointer = a.TargetPointer?.Pointer
+                    // 目标可以是变量（有指针），也可以是结构体成员这类表达式
+                    var pointer = a.ValuePointer
+                        ?? a.TargetPointer?.Pointer
+                        ?? (a.TargetArg as StructMemberArg)?.Member
                         ?? (variables is not null && variables.TryGetValue(a.VariableName, out var ap) ? ap : null);
-                    if (pointer is null) { throw new InvalidOperationException($"赋值目标 {a.VariableName} 没有可用的属性指针"); }
+
+                    KismetExpression target = a.TargetArg is { } ta
+                        ? ToExpr(ta)
+                        : pointer is not null
+                            ? TargetExpr(a.TargetPointer, pointer)
+                            : throw new InvalidOperationException($"赋值目标 {a.VariableName} 无法构造");
 
                     // EX_Let 需要 Value（指针）与 Variable（表达式）同时给
                     result.Add(new EX_Let
                     {
-                        Value = pointer,
-                        Variable = TargetExpr(a.TargetPointer, pointer),
+                        Value = pointer!,
+                        Variable = target,
                         Expression = ToExpr(a.Value)
                     });
                     break;

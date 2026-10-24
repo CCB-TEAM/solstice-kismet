@@ -55,7 +55,12 @@ public static class KismetDecompiler
                     continue;
 
                 case EX_Let let:
-                    nodes.Add(new AssignNode(TargetName(let.Variable), ToArg(let.Expression, options) ?? new IntArg(0), PointerOf(let.Variable)));
+                    nodes.Add(new AssignNode(
+                        TargetName(let.Variable),
+                        ToArg(let.Expression, options) ?? new IntArg(0),
+                        PointerOf(let.Variable),
+                        ToArg(let.Variable, options),
+                        let.Value));
                     i++;
                     continue;
 
