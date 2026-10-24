@@ -392,6 +392,7 @@ public static class KismetDecompiler
             }
 
             default:
+                options.Warn?.Invoke($"ContextExpression 类型 {ctx.ContextExpression?.Inst} 未处理");
                 return null;
         }
     }
