@@ -16,7 +16,7 @@
 
 | 项 | 结果 |
 |---|---|
-| 自检 `tests/Solstice.Kismet.Verify` | **33/33** |
+| 自检 `tests/Solstice.Kismet.Verify` | **40/40** |
 | 真实资产往返一致（`Blueprints/Logic` 全部 28 个资产） | **1305 / 1305 (100%)** |
 | 结构还原退化（6 资产口径 131 函数） | **7 个函数**（原 47 个） |
 | CI | 绿 |
@@ -54,8 +54,9 @@ src/Solstice.Kismet/
   KismetWorkspace.cs   对外门面：加载资产、选函数、编译、回写
 tools/KismetProbe/     命令行探针（结构 / 反编译 / 回编译 / 结构对比 / 基本块）
 tools/coverage.ps1     真实资产覆盖率（逐函数跑探针，分母取自探针总数）
-tests/Solstice.Kismet.Verify/  33 项自检
+tests/Solstice.Kismet.Verify/  40 项自检
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
+docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 ```
 
 ## 四、最关键的设计原则
@@ -216,7 +217,7 @@ $env:NUGET_PACKAGES='D:\files\projects\.nuget_packages'
 Set-Location D:\files\projects\out-repos\solstice-kismet
 
 dotnet build tools\KismetProbe\KismetProbe.csproj
-dotnet run --project tests\Solstice.Kismet.Verify     # 必须 33/33
+dotnet run --project tests\Solstice.Kismet.Verify     # 必须 40/40
 
 .\tools\coverage.ps1 `
   -AssetDir 'D:\devenv\fmodel\Output\Exports\kards\Content\Blueprints\Logic' `
@@ -224,7 +225,7 @@ dotnet run --project tests\Solstice.Kismet.Verify     # 必须 33/33
 # 必须 1305 / 1305
 ```
 
-**提交前必须两项都绿**：自检 33/33 + 真实资产覆盖率不掉。
+**提交前必须两项都绿**：自检 40/40 + 真实资产覆盖率不掉。
 （曾经因为跳过自检提交，导致 CI 挂掉，只能 `git reset --hard` 回滚。）
 
 ## 九、Git
