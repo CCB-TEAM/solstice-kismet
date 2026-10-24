@@ -333,6 +333,10 @@ public static class KismetDecompiler
             v.VirtualFunctionName?.ToString() ?? "<?>",
             ToArgs(v.Parameters, options),
             CallShape.Virtual),
+        EX_VirtualFunction vf => new CallArg(
+            vf.VirtualFunctionName?.ToString() ?? "<?>",
+            ToArgs(vf.Parameters, options),
+            CallShape.VirtualGlobal),
         EX_Context ctx => ContextArg(ctx, options),
         _ => null
     };
@@ -352,6 +356,11 @@ public static class KismetDecompiler
                 return new CallArg(
                     v.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(v.Parameters, options),
                     CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.Virtual);
+
+            case EX_VirtualFunction vf:
+                return new CallArg(
+                    vf.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(vf.Parameters, options),
+                    CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.VirtualGlobal);
 
             case EX_FinalFunction f:
             {

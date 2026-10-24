@@ -141,6 +141,9 @@ public enum CallShape
     /// <summary>EX_LocalVirtualFunction：按 FName 调本资产函数。</summary>
     Virtual,
 
+    /// <summary>EX_VirtualFunction：按 FName 调虚函数（非 Local 形态）。</summary>
+    VirtualGlobal,
+
     /// <summary>EX_Context：实例函数，需要对象上下文。</summary>
     Context
 }

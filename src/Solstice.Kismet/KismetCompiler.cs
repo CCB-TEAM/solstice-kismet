@@ -225,6 +225,11 @@ public static class KismetCompiler
                             VirtualFunctionName = resolveName(c.Function),
                             Parameters = inner
                         },
+                        CallShape.VirtualGlobal when resolveName is not null => new EX_VirtualFunction
+                        {
+                            VirtualFunctionName = resolveName(c.Function),
+                            Parameters = inner
+                        },
                         _ => new EX_FinalFunction { StackNode = stack, Parameters = inner }
                     };
 
