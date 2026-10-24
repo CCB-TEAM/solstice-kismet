@@ -259,32 +259,97 @@ public enum ContextKind
 
 /// <summary>以另一个调用的返回值作为参数。</summary>
 public sealed record CallArg(
-    string Function,
+    FunctionRef Callee,
     IReadOnlyList<KArg> Args,
     CallShape Shape,
     string? ObjectVariable = null,
-    FPackageIndex? StackNode = null,
     KArg? ObjectArg = null,
     KismetPropertyPointer? RValuePointer = null,
     CallShape InnerShape = CallShape.Final,
     KArg? Delegate = null,
-    ContextKind ContextKind = ContextKind.Normal,
-    string? Owner = null)
-    : KArg(PinType.Object);
+    ContextKind ContextKind = ContextKind.Normal)
+    : KArg(PinType.Object)
+{
+    /// <summary>兼容旧写法：只给名字。</summary>
+    public CallArg(
+        string Function,
+        IReadOnlyList<KArg> Args,
+        CallShape Shape,
+        string? ObjectVariable = null,
+        FPackageIndex? StackNode = null,
+        KArg? ObjectArg = null,
+        KismetPropertyPointer? RValuePointer = null,
+        CallShape InnerShape = CallShape.Final,
+        KArg? Delegate = null,
+        ContextKind ContextKind = ContextKind.Normal,
+        string? Owner = null)
+        : this(
+            FunctionRef.Named(Function, Owner, StackNode),
+            Args,
+            Shape,
+            ObjectVariable,
+            ObjectArg,
+            RValuePointer,
+            InnerShape,
+            Delegate,
+            ContextKind)
+    {
+    }
+
+    public string Function => Callee.Name;
+
+    public string? Owner => string.IsNullOrEmpty(Callee.OwnerPath) ? null : Callee.OwnerPath;
+
+    public FPackageIndex? StackNode => Callee.HasIndex ? Callee.Index : null;
+}
 
 /// <summary>多播委托调用，编译成 EX_CallMulticastDelegate。</summary>
-public sealed record MulticastCallNode(
-    string Function,
-    IReadOnlyList<KArg> Args,
-    KArg? Delegate,
-    FPackageIndex? StackNode = null,
-    string? Owner = null)
-    : KNode($"Multicast {Function}");
+public sealed record MulticastCallNode(FunctionRef Callee, IReadOnlyList<KArg> Args, KArg? Delegate)
+    : KNode($"Multicast {Callee.Name}")
+{
+    /// <summary>兼容旧写法：只给名字。</summary>
+    public MulticastCallNode(
+        string Function,
+        IReadOnlyList<KArg> Args,
+        KArg? Delegate,
+        FPackageIndex? StackNode = null,
+        string? Owner = null)
+        : this(FunctionRef.Named(Function, Owner, StackNode), Args, Delegate)
+    {
+    }
+
+    public string Function => Callee.Name;
+
+    public FPackageIndex? StackNode => Callee.HasIndex ? Callee.Index : null;
+}
 
 /// <summary>节点（编辑器层的逻辑单元，一行一个）。</summary>
 public abstract record KNode(string Title);
 
-public sealed record CallNode(string Function, IReadOnlyList<KArg> Args, string? Owner = null, FPackageIndex? StackNode = null) : KNode(Function);
+/// <summary>
+/// 函数调用：**直接持有函数引用**（名字 + 归属 + 包索引），不再「名字字符串 + 可选 StackNode」两处真相。
+///
+/// <para>
+/// 这和 UE 的编码方式一致：<c>EX_FinalFunction</c> 把 StackNode 和参数放在同一条指令里，
+/// 所以模型里也应该是「调用带着被调函数」。用 <see cref="FunctionRef.Named"/> 或
+/// <see cref="KismetWorkspace.ResolveFunction"/> 得到引用再构造。
+/// </para>
+/// </summary>
+public sealed record CallNode(FunctionRef Callee, IReadOnlyList<KArg> Args)
+    : KNode(Callee.Name)
+{
+    /// <summary>兼容旧写法：只给名字（索引为 0，编译时按归属/唯一同名解析）。</summary>
+    public CallNode(string function, IReadOnlyList<KArg> args, string? owner = null, FPackageIndex? stackNode = null)
+        : this(FunctionRef.Named(function, owner, stackNode), args)
+    {
+    }
+
+    public string Function => Callee.Name;
+
+    public string? Owner => string.IsNullOrEmpty(Callee.OwnerPath) ? null : Callee.OwnerPath;
+
+    public FPackageIndex? StackNode => Callee.HasIndex ? Callee.Index : null;
+}
 
 public sealed record IfNode(
     KArg Condition,
@@ -314,15 +379,42 @@ public sealed record AssignNode(
 /// </summary>
 public sealed record ContextCallNode(
     string ObjectVariable,
-    string Function,
+    FunctionRef Callee,
     IReadOnlyList<KArg> Args,
-    string? Owner = null,
     KArg? ObjectArg = null,
     KismetPropertyPointer? RValuePointer = null,
-        CallShape InnerShape = CallShape.Final,
-    FPackageIndex? StackNode = null,
+    CallShape InnerShape = CallShape.Final,
     ContextKind ContextKind = ContextKind.Normal)
-    : KNode($"{ObjectVariable}.{Function}");
+    : KNode($"{ObjectVariable}.{Callee.Name}")
+{
+    /// <summary>兼容旧写法：只给名字。</summary>
+    public ContextCallNode(
+        string ObjectVariable,
+        string Function,
+        IReadOnlyList<KArg> Args,
+        string? Owner = null,
+        KArg? ObjectArg = null,
+        KismetPropertyPointer? RValuePointer = null,
+        CallShape InnerShape = CallShape.Final,
+        FPackageIndex? StackNode = null,
+        ContextKind ContextKind = ContextKind.Normal)
+        : this(
+            ObjectVariable,
+            FunctionRef.Named(Function, Owner, StackNode),
+            Args,
+            ObjectArg,
+            RValuePointer,
+            InnerShape,
+            ContextKind)
+    {
+    }
+
+    public string Function => Callee.Name;
+
+    public string? Owner => string.IsNullOrEmpty(Callee.OwnerPath) ? null : Callee.OwnerPath;
+
+    public FPackageIndex? StackNode => Callee.HasIndex ? Callee.Index : null;
+}
 
 /// <summary>
 /// 虚函数调用：编译成 EX_LocalVirtualFunction。
@@ -336,12 +428,34 @@ public sealed record VirtualCallNode(string Function, IReadOnlyList<KArg> Args)
     : KNode($"Virtual {Function}");
 
 /// <summary>非 native 的 final 函数调用，编译成 EX_LocalFinalFunction。</summary>
-public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null, string? Owner = null)
-    : KNode($"LocalFinal {Function}");
+public sealed record LocalFinalCallNode(FunctionRef Callee, IReadOnlyList<KArg> Args)
+    : KNode($"LocalFinal {Callee.Name}")
+{
+    /// <summary>兼容旧写法：只给名字。</summary>
+    public LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null, string? Owner = null)
+        : this(FunctionRef.Named(Function, Owner, StackNode), Args)
+    {
+    }
+
+    public string Function => Callee.Name;
+
+    public FPackageIndex? StackNode => Callee.HasIndex ? Callee.Index : null;
+}
 
 /// <summary>运算符式调用，编译成 EX_CallMath（不需要 context）。</summary>
-public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null, string? Owner = null)
-    : KNode($"Math {Function}");
+public sealed record MathCallNode(FunctionRef Callee, IReadOnlyList<KArg> Args)
+    : KNode($"Math {Callee.Name}")
+{
+    /// <summary>兼容旧写法：只给名字。</summary>
+    public MathCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null, string? Owner = null)
+        : this(FunctionRef.Named(Function, Owner, StackNode), Args)
+    {
+    }
+
+    public string Function => Callee.Name;
+
+    public FPackageIndex? StackNode => Callee.HasIndex ? Callee.Index : null;
+}
 
 /// <summary>EX_LetBase 家族的赋值种类（都是 VariableExpression + AssignmentExpression 同形）。</summary>
 public enum AssignKind

@@ -223,12 +223,16 @@ public static class KismetCompiler
         /// 有显式索引就用；给了归属类就按 (名字, 归属) 精确查；只有唯一同名才接受；
         /// 其余一律报错——同名函数挂在不同类下时，猜错会让字节看着对、运行行为错。
         /// </summary>
-        FPackageIndex StackOf(string name, FPackageIndex? explicitIndex, string? owner = null)
+        FPackageIndex StackOf(FunctionRef callee)
         {
-            if (explicitIndex is not null && explicitIndex.Index != 0)
+            // 引用自带索引——这是唯一真相，不再按名字查表
+            if (callee.HasIndex)
             {
-                return explicitIndex;
+                return callee.Index;
             }
+
+            var name = callee.Name;
+            var owner = callee.OwnerPath;
 
             if (functionsByOwner is not null)
             {
@@ -237,7 +241,7 @@ public static class KismetCompiler
                     return functionsByOwner.TryGetValue((name, owner), out var byOwner)
                         ? byOwner
                         : throw new InvalidOperationException(
-                            $"调用 {owner}.{name} 缺少 StackNode，且 Import 表里没有这个组合——先 EnsureFunction 补导入");
+                            $"调用 {owner}.{name} 没有索引，且 Import 表里没有这个组合——先 EnsureFunction 补导入");
                 }
 
                 var owners = functionsByOwner.Where(kv => kv.Key.Name == name).Select(kv => kv.Key.Owner).ToArray();
@@ -247,9 +251,9 @@ public static class KismetCompiler
                 }
 
                 throw new InvalidOperationException(owners.Length == 0
-                    ? $"调用 {name} 缺少 StackNode，Import 表里也没有同名函数"
-                    : $"调用 {name} 缺少 StackNode，而 Import 表里有 {owners.Length} 个归属，无法确定：\n  " +
-                      string.Join("\n  ", owners) + "\n请给节点设置 Owner，或用 KismetWorkspace.ResolveFunction 指定归属。");
+                    ? $"调用 {name} 没有索引，Import 表里也没有同名函数"
+                    : $"调用 {name} 没有索引，而 Import 表里有 {owners.Length} 个归属，无法确定：\n  " +
+                      string.Join("\n  ", owners) + "\n请用 KismetWorkspace.ResolveFunction 拿到引用再构造节点。");
             }
 
             // 兼容旧调用方（只给了 name→index 的折叠表，无法区分归属）
@@ -456,7 +460,7 @@ public static class KismetCompiler
                 case CallArg c:
                 {
                     var inner = c.Args.Select(ToExpr).ToArray();
-                    var stack = StackOf(c.Function, c.StackNode, c.Owner);
+                    var stack = StackOf(c.Callee);
 
                     // 外层要不要包 EX_Context，由 Shape 决定；
                     // 内层用哪个指令，由 InnerShape 决定（两者是独立的语义）。
@@ -532,7 +536,7 @@ public static class KismetCompiler
             {
                 case CallNode c:
                     // 函数调用：StackNode 指向 Import 表里的函数，参数在 Parameters 里
-                    result.Add(new EX_FinalFunction { StackNode = StackOf(c.Function, c.StackNode, c.Owner), Parameters = BuildArgs(c) });
+                    result.Add(new EX_FinalFunction { StackNode = StackOf(c.Callee), Parameters = BuildArgs(c) });
                     break;
 
 
@@ -573,7 +577,7 @@ public static class KismetCompiler
                     // ContextExpression 的形态由 InnerShape 决定，不一定都是 FinalFunction。
                     // StackNode 必须用反编译保留的那个：同名导入可能有多个，按名字查会取错索引。
                     var ctxArgs = BuildArgs(new CallNode(cc.Function, cc.Args));
-                    var ctxStack = StackOf(cc.Function, cc.StackNode, cc.Owner);
+                    var ctxStack = StackOf(cc.Callee);
 
                     KismetExpression inner = cc.InnerShape switch
                     {
@@ -659,7 +663,7 @@ public static class KismetCompiler
                     // 运算符式调用：不需要 context
                     result.Add(new EX_CallMath
                     {
-                        StackNode = StackOf(mc.Function, mc.StackNode, mc.Owner),
+                        StackNode = StackOf(mc.Callee),
                         Parameters = BuildArgs(new CallNode(mc.Function, mc.Args))
                     });
                     break;
@@ -667,7 +671,7 @@ public static class KismetCompiler
                 case MulticastCallNode mcn:
                     result.Add(new EX_CallMulticastDelegate
                     {
-                        StackNode = StackOf(mcn.Function, mcn.StackNode, mcn.Owner),
+                        StackNode = StackOf(mcn.Callee),
                         Parameters = BuildArgs(new CallNode(mcn.Function, mcn.Args)),
                         Delegate = mcn.Delegate is { } md ? ToExpr(md) : new EX_Nothing()
                     });
@@ -677,7 +681,7 @@ public static class KismetCompiler
                     // 非 native 的 final 函数（脚本函数）
                     result.Add(new EX_LocalFinalFunction
                     {
-                        StackNode = StackOf(lf.Function, lf.StackNode, lf.Owner),
+                        StackNode = StackOf(lf.Callee),
                         Parameters = BuildArgs(new CallNode(lf.Function, lf.Args))
                     });
                     break;

@@ -304,19 +304,20 @@ public sealed class KismetWorkspace
             ? function.Index
             : ImportIndex.EnsureFunction(_asset, function.Name, function.OwnerPath);
 
+        // 把索引写回引用，节点直接持有它——不再留「名字 + 可选 StackNode」两处真相
+        var bound = function with { Index = index };
+
         if (signature.IsStatic)
         {
-            return new CallNode(function.Name, args, function.OwnerPath, index);
+            return new CallNode(bound, args);
         }
 
         return new ContextCallNode(
             "this",
-            function.Name,
+            bound,
             args,
-            Owner: function.OwnerPath,
             ObjectArg: self ?? new SelfArg(),
-            InnerShape: CallShape.Final,
-            StackNode: index);
+            InnerShape: CallShape.Final);
     }
 
     /// <summary>按名字新建调用（内部先 <see cref="ResolveFunction"/>，有歧义会报错）。</summary>
@@ -636,25 +637,25 @@ public sealed class KismetWorkspace
             ? function.Index
             : ImportIndex.EnsureFunction(_asset, function.Name, function.OwnerPath);
 
+        var bound = function with { Index = index };
+
         if (function.IsExported)
         {
-            return new CallArg(function.Name, args, CallShape.Virtual, Owner: function.OwnerPath, StackNode: index);
+            return new CallArg(bound, args, CallShape.Virtual);
         }
 
         if (signature.IsStatic)
         {
-            return new CallArg(function.Name, args, CallShape.Final, Owner: function.OwnerPath, StackNode: index);
+            return new CallArg(bound, args, CallShape.Final);
         }
 
         return new CallArg(
-            function.Name,
+            bound,
             args,
             CallShape.Context,
             ObjectVariable: "this",
-            StackNode: index,
             ObjectArg: self ?? new SelfArg(),
-            InnerShape: CallShape.Final,
-            Owner: function.OwnerPath);
+            InnerShape: CallShape.Final);
     }
 
     /// <summary>

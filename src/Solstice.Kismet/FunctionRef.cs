@@ -30,5 +30,17 @@ public sealed record FunctionRef(
     /// <summary>完整路径，如 <c>/Script/Engine.KismetMathLibrary.Greater_IntInt</c>。</summary>
     public string FullPath => string.IsNullOrEmpty(OwnerPath) ? Name : $"{OwnerPath}.{Name}";
 
+    /// <summary>构造一个「只有名字」的引用（索引为 0 表示还没落表）。</summary>
+    public static FunctionRef Named(
+        string name,
+        string? ownerPath = null,
+        FPackageIndex? index = null,
+        bool exported = false,
+        FunctionSignature? signature = null)
+        => new(name, ownerPath ?? "", index ?? new FPackageIndex(0), exported, signature);
+
+    /// <summary>是否已带包索引（0 表示只解析没落表）。</summary>
+    public bool HasIndex => Index.Index != 0;
+
     public override string ToString() => FullPath;
 }

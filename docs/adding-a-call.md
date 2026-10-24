@@ -89,13 +89,13 @@ var callee = ws.ResolveFunction("GetSession", "/Script/kards.KardsSession"); // 
 | `FUNC_Static` | `CallNode` | `EX_FinalFunction`（StackNode = Import） |
 | 其余 | `ContextCallNode` | `EX_Context` + 内层 `EX_FinalFunction`，对象默认 `EX_Self` |
 
-节点里一定带 `StackNode`（= `FunctionRef.Index`）。**编译器不再按名字回退**：
+节点**直接持有 `FunctionRef`**（名字 + 归属 + 索引），和 UE 的编码方式一致——`EX_FinalFunction` 把 StackNode 与参数放在同一条指令里。所以不再有「名字字符串 + 可选 StackNode」两处真相，编译器也**不再按名字查表**：
 
 ```
-有 StackNode            → 用
-给了 Owner              → 按 (名字, 归属) 精确查；查不到报错
-无 Owner 且同名唯一      → 用
-无 Owner 且同名多个      → 报错并列出候选
+引用自带索引            → 直接用（正常路径，CreateCall / 反编译产物都走这条）
+引用无索引但给了归属     → 按 (名字, 归属) 精确查；查不到报错
+引用无索引且同名唯一     → 用
+引用无索引且同名多个     → 报错并列出候选
 ```
 
 ## 六、参数：`DefaultArgs`
