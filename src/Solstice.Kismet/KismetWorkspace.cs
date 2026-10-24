@@ -134,6 +134,12 @@ public sealed class KismetWorkspace
     /// </param>
     public FunctionRef? ResolveFunction(string functionName, string? ownerPath = null, bool ensureImport = true)
     {
+        // 归属允许写「类短名」：objects.json 能把它解析成全路径（唯一才接受，多个会列出候选）
+        if (!string.IsNullOrWhiteSpace(ownerPath) && Objects is not null && !ownerPath.Contains('/'))
+        {
+            ownerPath = Objects.ResolveClass(ownerPath);
+        }
+
         var byOwner = FunctionImportOwners();
 
         // ① 精确匹配
@@ -441,6 +447,126 @@ public sealed class KismetWorkspace
         return className;
     }
 
+    /// <summary>
+    /// 打印函数里出现过的变量表达式及其属性指针（诊断用）。
+    ///
+    /// <para>
+    /// 编译器生成的临时变量（<c>CallFunc_XXX_ReturnValue</c>）就是这里的
+    /// <c>LocalVariable</c>：路径段数、ResolvedOwner 都能看到。反编译保留它们、
+    /// 回编译原样发回，所以不需要「临时变量分配」逻辑。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> DescribeVariables(string functionName)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        var lines = new List<string>();
+        foreach (var variable in ExpressionWalker.CollectVariables(fn.ScriptBytecode!))
+        {
+            var pointer = variable.Variable;
+            var path = pointer?.New?.Path;
+            var names = path is null ? "" : string.Join(".", path.Select(p => p.ToString()));
+            var owner = pointer?.New?.ResolvedOwner?.Index ?? pointer?.Old?.Index ?? 0;
+            lines.Add($"{variable.GetType().Name,-22} path=[{names}] resolvedOwner={owner}");
+        }
+
+        return lines.Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// 取（或构造）一个**局部变量**的指针：<c>FFieldPath{ [名字], ResolvedOwner = 该函数导出 }</c>。
+    ///
+    /// <para>
+    /// 这正是 UE 给 <c>CallFunc_XXX_ReturnValue</c> 这类临时变量用的形态
+    /// （实测 <c>path=[CallFunc_GetChat_chat] resolvedOwner=23</c>，23 就是函数导出索引）。
+    /// 名字已存在就直接复用原指针，不存在则按同一形态构造一个。
+    /// </para>
+    /// </summary>
+    public PointerArg EnsureLocalVariable(string functionName, string variableName)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        var existing = ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!);
+        if (existing.TryGetValue(variableName, out var pointer))
+        {
+            return new PointerArg(pointer, variableName);
+        }
+
+        var exportIndex = _asset.Exports.IndexOf(fn) + 1;
+        if (exportIndex <= 0)
+        {
+            throw new InvalidOperationException($"函数 {functionName} 不在导出表里，无法确定局部变量归属");
+        }
+
+        return new PointerArg(
+            new KismetPropertyPointer(new FFieldPath
+            {
+                Path = [new FName(_asset, variableName)],
+                ResolvedOwner = new FPackageIndex(exportIndex)
+            }),
+            variableName);
+    }
+
+    /// <summary>
+    /// 把一次调用当作**值**来用（返回 <see cref="CallArg"/>），用于「赋值给变量 / 当参数」。
+    /// </summary>
+    public KArg CreateCallArg(FunctionRef function, IReadOnlyList<KArg>? args = null, KArg? self = null)
+    {
+        var signature = function.Signature
+                        ?? Catalog?.Find(function.OwnerPath, function.Name)
+                        ?? throw new InvalidOperationException($"没有 {function.FullPath} 的签名——不猜调用形态");
+
+        args ??= DefaultArgs(function.Name, function.OwnerPath).Select(a => a.Value).ToArray();
+
+        var index = function.Index.Index != 0
+            ? function.Index
+            : ImportIndex.EnsureFunction(_asset, function.Name, function.OwnerPath);
+
+        if (function.IsExported)
+        {
+            return new CallArg(function.Name, args, CallShape.Virtual, Owner: function.OwnerPath, StackNode: index);
+        }
+
+        if (signature.IsStatic)
+        {
+            return new CallArg(function.Name, args, CallShape.Final, Owner: function.OwnerPath, StackNode: index);
+        }
+
+        return new CallArg(
+            function.Name,
+            args,
+            CallShape.Context,
+            ObjectVariable: "this",
+            StackNode: index,
+            ObjectArg: self ?? new SelfArg(),
+            InnerShape: CallShape.Final,
+            Owner: function.OwnerPath);
+    }
+
+    /// <summary>
+    /// 调用一次并把返回值存进局部变量（等价于 UE 的
+    /// <c>Set CallFunc_XXX_ReturnValue = XXX(...)</c>）。
+    /// </summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) AssignCallResult(
+        string functionName,
+        FunctionRef callee,
+        string resultVariable,
+        params KArg[] args)
+    {
+        var target = EnsureLocalVariable(functionName, resultVariable);
+        var value = CreateCallArg(callee, args.Length > 0 ? args : null);
+
+        return Edit(functionName, nodes =>
+        {
+            var list = nodes.ToList();
+            var at = list.Count > 0 && list[^1] is ReturnNode ? list.Count - 1 : list.Count;
+            list.Insert(at, new AssignNode(resultVariable, value, TargetPointer: target));
+            return list;
+        });
+    }
+
     /// <summary>当前 Import 表条目数（新增导入前后对比用）。</summary>
     public int ImportCount => _asset.Imports.Count;
 
@@ -563,7 +689,8 @@ public sealed class KismetWorkspace
         ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!),
         ImportIndex.BuildFunctionIndex(_asset),
         e => e.GetSize(_asset),
-        n => new FName(_asset, n));
+        n => new FName(_asset, n),
+        ImportIndex.BuildFunctionIndexByOwner(_asset));
 
     private byte[] SerializeBytecode(IReadOnlyList<KismetExpression> expressions)
     {
@@ -662,6 +789,7 @@ public sealed class KismetWorkspace
         }
 
         var functions = ImportIndex.BuildFunctionIndex(_asset);
+        var functionsByOwner = ImportIndex.BuildFunctionIndexByOwner(_asset);
 
         var exprs = KismetCompiler.CompileToExpressions(
             nodes,
@@ -669,7 +797,8 @@ public sealed class KismetWorkspace
                 Variables: variables,
                 Functions: functions,
                 Measure: e => e.GetSize(_asset),
-                ResolveName: n => new FName(_asset, n)));
+                ResolveName: n => new FName(_asset, n),
+                FunctionsByOwner: functionsByOwner));
 
         if (assign)
         {

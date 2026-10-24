@@ -47,6 +47,15 @@ var onThis = ws.CreateCall(ws.ResolveFunction("ClearCardTexts")!);  // 非静态
 // 同名函数挂在不同类下时，只给名字会**报错并列出候选**，逼你指定归属：
 //   ws.ResolveFunction("GetSession", "/Script/kards.KardsSession")
 
+// 归属也可以只给「类短名」——先 AttachObjects(objects.json)，由它解析成全路径
+ws.AttachObjects(ObjectCatalog.Load(objectsJson));
+var m = ws.ResolveFunction("Greater_IntInt", "KismetMathLibrary");
+//   → /Script/Engine.KismetMathLibrary.Greater_IntInt
+
+// 调用 + 结果存进临时变量（等价 UE 的 Set CallFunc_XXX_ReturnValue = XXX(...)）：
+// 局部变量指针形如 FFieldPath{ [名字], ResolvedOwner = 该函数导出 }
+ws.AssignCallResult("SomeFunction", m!, "CallFunc_Greater_IntInt_ReturnValue");
+
 // 2.7 读-改-写一条龙：反编译（已字节校验）→ 改 → 编译写回
 ws.InsertCall("SomeFunction", ws.ResolveFunction("KardsClearLaunchNotification")!);  // 传引用
 ws.Edit("SomeFunction", nodes => nodes.SkipLast(1));             // 任意变换

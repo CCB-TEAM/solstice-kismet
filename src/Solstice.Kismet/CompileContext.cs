@@ -24,7 +24,8 @@ public sealed record CompileContext(
     IReadOnlyDictionary<string, KismetPropertyPointer>? Variables = null,
     IReadOnlyDictionary<string, FPackageIndex>? Functions = null,
     Func<KismetExpression, uint>? Measure = null,
-    Func<string, FName>? ResolveName = null)
+    Func<string, FName>? ResolveName = null,
+    IReadOnlyDictionary<(string Name, string Owner), FPackageIndex>? FunctionsByOwner = null)
 {
     public static CompileContext Empty { get; } = new();
 }

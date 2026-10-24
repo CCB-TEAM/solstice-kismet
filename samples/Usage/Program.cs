@@ -98,6 +98,20 @@ if (catalogPath is not null && File.Exists(catalogPath))
     Console.WriteLine($"[5] 往 {target} 插入 Greater_IntInt: 表达式 {before} -> {after}");
     Console.WriteLine($"      写回 uasset {saved.UAsset.Length} 字节 / uexp {saved.UExp.Length} 字节");
     Console.WriteLine($"      重新打开后该函数 {again.Count} 个节点（读回成功）");
+
+    // ---- 场景 6：调用 + 结果存进临时变量（等价 UE 的 CallFunc_XXX_ReturnValue）----
+    var tempName = "CallFunc_Greater_IntInt_ReturnValue";
+    var withTemp = ws.AssignCallResult(target, ws.ResolveFunction("Greater_IntInt")!, tempName);
+    var saved2 = ws.Save(workDir, "edited2.uasset");
+    var reopened2 = KismetWorkspace.Open(saved2.UAsset, saved2.UExp, File.ReadAllBytes(usmapPath), workDir + "-re2");
+    var finalNodes = reopened2.Decompile(target);
+
+    Console.WriteLine($"[6] 调用结果存进临时变量 {tempName}: 表达式 -> {ws.ExpressionCount(target)}");
+    Console.WriteLine("      读回后的节点:");
+    foreach (var node in finalNodes)
+    {
+        Console.WriteLine($"        {node.Title}");
+    }
 }
 else
 {

@@ -66,6 +66,43 @@ public sealed class ObjectCatalog
     public bool IsClass(string path)
         => _byPath.TryGetValue(path, out var info) && string.Equals(info.Type, "Class", StringComparison.Ordinal);
 
+    /// <summary>
+    /// 把「类短名或全路径」解析成类全路径。
+    ///
+    /// <para>
+    /// 全路径（含点且表里存在）原样返回；否则按短名匹配，**唯一才返回**，
+    /// 多个则抛异常列出候选——不让调用方在歧义上瞎猜。
+    /// </para>
+    /// </summary>
+    public string ResolveClass(string classRef)
+    {
+        if (classRef.Contains('.') && _byPath.TryGetValue(classRef, out var exact)
+            && string.Equals(exact.Type, "Class", StringComparison.Ordinal))
+        {
+            return classRef;
+        }
+
+        var shortName = LastSegment(classRef);
+        var matches = _byPath
+            .Where(kv => string.Equals(kv.Value.Type, "Class", StringComparison.Ordinal)
+                         && string.Equals(LastSegment(kv.Key), shortName, StringComparison.Ordinal))
+            .Select(kv => kv.Key)
+            .ToArray();
+
+        if (matches.Length == 1)
+        {
+            return matches[0];
+        }
+
+        if (matches.Length == 0)
+        {
+            throw new InvalidOperationException($"对象表里没有名为 {classRef} 的类");
+        }
+
+        throw new InvalidOperationException(
+            $"{classRef} 匹配到 {matches.Length} 个类，无法确定：\n  " + string.Join("\n  ", matches));
+    }
+
     private static string LastSegment(string path)
     {
         var dot = path.LastIndexOf('.');

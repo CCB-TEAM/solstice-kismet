@@ -252,6 +252,9 @@ CI 机器上没有资产，自检跑不到它。
 | `CreateCall(ref)` | 只造节点，不写回；形态按签名选，Import 缺失时自动补 |
 | `DefaultArgs(name)` | 看默认参数，`IsPlaceholder` 标出无法忠实合成的 |
 | `PlanCall(name)` | 引脚级描述（编辑器 UI 用），同标占位 |
+| `CreateCallArg(ref)` | 把调用当**值**用（赋值给变量 / 当参数） |
+| `EnsureLocalVariable(fn, name)` | 取/构造局部变量指针（<c>FFieldPath{名字, ResolvedOwner=函数导出}</c>） |
+| `AssignCallResult(fn, ref, var)` | 调用并把返回值存进临时变量（等价 <c>Set CallFunc_XXX_ReturnValue</c>） |
 | `BakeUbergraph(name)` | 重烘 ubergraph 并返回入口偏移表 |
 
 `--plan` 模式暴露过一个真 bug：`NameProperty` 的默认值原本用空字符串建 `FName`，

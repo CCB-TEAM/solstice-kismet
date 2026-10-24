@@ -33,6 +33,10 @@ var catalogIndex = Array.IndexOf(args, "--catalog");
 var catalogPath = catalogIndex >= 0 && catalogIndex + 1 < args.Length ? args[catalogIndex + 1] : null;
 var planIndex = Array.IndexOf(args, "--plan");
 var planFunction = planIndex >= 0 && planIndex + 1 < args.Length ? args[planIndex + 1] : null;
+var classIndex = Array.IndexOf(args, "--class");
+var classRef = classIndex >= 0 && classIndex + 1 < args.Length ? args[classIndex + 1] : null;
+var varsIndex = Array.IndexOf(args, "--vars");
+var varsFunction = varsIndex >= 0 && varsIndex + 1 < args.Length ? args[varsIndex + 1] : null;
 var importsIndex = Array.IndexOf(args, "--imports");
 var importProbe = importsIndex >= 0 && importsIndex + 1 < args.Length ? args[importsIndex + 1] : null;
 
@@ -65,7 +69,12 @@ if (planFunction is not null)
 
 if (importProbe is not null)
 {
-    return RunImports(files, usmapPath, importProbe, catalogPath);
+    return RunImports(files, usmapPath, importProbe, catalogPath, classRef);
+}
+
+if (varsFunction is not null)
+{
+    return RunVars(files, usmapPath, varsFunction);
 }
 
 if (args.Contains("--collisions"))
@@ -458,7 +467,35 @@ static int RunCollisions(string[] files, string usmapPath, string? catalogPath)
 
 // 打印「新建调用会补出哪些 Import」：函数条目本身 + 它的 outer 链。
 // 用来核对新增导入到底是克隆来的还是合成的。
-static int RunImports(string[] files, string usmapPath, string callee, string? catalogPath)
+static int RunVars(string[] files, string usmapPath, string function)
+{
+    var workDir = Path.Combine(Path.GetTempPath(), "kismet-vars-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(workDir);
+
+    var file = files.FirstOrDefault(f => File.Exists(Path.ChangeExtension(f, ".uexp")));
+    if (file is null)
+    {
+        Console.Error.WriteLine("没有可用资产");
+        return 2;
+    }
+
+    var ws = KismetWorkspace.Open(
+        File.ReadAllBytes(file),
+        File.ReadAllBytes(Path.ChangeExtension(file, ".uexp")),
+        File.ReadAllBytes(usmapPath),
+        workDir);
+
+    Console.WriteLine($"函数 {function} 的局部变量指针（{Path.GetFileName(file)}）:");
+    foreach (var line in ws.DescribeVariables(function))
+    {
+        Console.WriteLine("  " + line);
+    }
+
+    Directory.Delete(workDir, true);
+    return 0;
+}
+
+static int RunImports(string[] files, string usmapPath, string callee, string? catalogPath, string? classRef)
 {
     if (catalogPath is null || !File.Exists(catalogPath))
     {
@@ -484,11 +521,25 @@ static int RunImports(string[] files, string usmapPath, string callee, string? c
     var ws = KismetWorkspace.Open(uassetBytes, uexpBytes, usmapBytes, workDir);
     ws.AttachCatalog(catalog);
 
+    // 可选：同时载入 objects.json，用「类短名」解析归属
+    var objectsPath = Path.Combine(Path.GetDirectoryName(catalogPath)!, "objects.json");
+    if (!File.Exists(objectsPath))
+    {
+        objectsPath = Path.Combine(Path.GetDirectoryName(catalogPath)!, "objects.kards.json");
+    }
+
+    if (File.Exists(objectsPath))
+    {
+        ws.AttachObjects(ObjectCatalog.Load(File.ReadAllText(objectsPath)));
+    }
+
     var before = ws.ImportCount;
-    ws.CreateCall(callee);              // 触发 EnsureFunction
+    var resolved = ws.ResolveFunction(callee, classRef);   // 传类名时走 objects.json 解析
+    ws.CreateCall(resolved!);
     var after = ws.ImportCount;
 
     Console.WriteLine($"资产 {Path.GetFileName(file)}: Import {before} -> {after}（新增 {after - before}）");
+    Console.WriteLine($"  引用: {resolved}  idx={resolved?.Index.Index} exported={resolved?.IsExported}");
     foreach (var line in ws.DescribeImports(callee))
     {
         Console.WriteLine("  " + line);

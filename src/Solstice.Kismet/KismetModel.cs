@@ -268,7 +268,8 @@ public sealed record CallArg(
     KismetPropertyPointer? RValuePointer = null,
     CallShape InnerShape = CallShape.Final,
     KArg? Delegate = null,
-    ContextKind ContextKind = ContextKind.Normal)
+    ContextKind ContextKind = ContextKind.Normal,
+    string? Owner = null)
     : KArg(PinType.Object);
 
 /// <summary>多播委托调用，编译成 EX_CallMulticastDelegate。</summary>
@@ -276,7 +277,8 @@ public sealed record MulticastCallNode(
     string Function,
     IReadOnlyList<KArg> Args,
     KArg? Delegate,
-    FPackageIndex? StackNode = null)
+    FPackageIndex? StackNode = null,
+    string? Owner = null)
     : KNode($"Multicast {Function}");
 
 /// <summary>节点（编辑器层的逻辑单元，一行一个）。</summary>
@@ -334,11 +336,11 @@ public sealed record VirtualCallNode(string Function, IReadOnlyList<KArg> Args)
     : KNode($"Virtual {Function}");
 
 /// <summary>非 native 的 final 函数调用，编译成 EX_LocalFinalFunction。</summary>
-public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null)
+public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null, string? Owner = null)
     : KNode($"LocalFinal {Function}");
 
 /// <summary>运算符式调用，编译成 EX_CallMath（不需要 context）。</summary>
-public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null)
+public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null, string? Owner = null)
     : KNode($"Math {Function}");
 
 /// <summary>EX_LetBase 家族的赋值种类（都是 VariableExpression + AssignmentExpression 同形）。</summary>
