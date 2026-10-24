@@ -88,8 +88,17 @@ public static class ExpressionWalker
                 continue;
             }
 
-            var name = string.Join(".", path.Select(p => p.ToString()));
-            index.TryAdd(name, pointer);
+            var full = string.Join(".", path.Select(p => p.ToString()));
+
+            // 同时索引全路径与最后一段。
+            // 反编译产出的名字是**最后一段**（TargetName），而 FFieldPath 可能是多段的
+            // （结构体成员链），只索引全路径会让按短名的查询全部落空——
+            // 编译侧就会退化成空指针，字节看着对、指向错。
+            index.TryAdd(full, pointer);
+            if (path.Length > 1)
+            {
+                index.TryAdd(path[^1].ToString(), pointer);
+            }
         }
 
         return index;

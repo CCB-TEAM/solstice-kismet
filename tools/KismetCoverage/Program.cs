@@ -77,6 +77,11 @@ if (varsFunction is not null)
     return RunVars(files, usmapPath, varsFunction);
 }
 
+if (args.Contains("--opcodes"))
+{
+    return RunOpcodes(files, usmapPath);
+}
+
 if (args.Contains("--collisions"))
 {
     return RunCollisions(files, usmapPath, catalogPath);
@@ -467,6 +472,39 @@ static int RunCollisions(string[] files, string usmapPath, string? catalogPath)
 
 // 打印「新建调用会补出哪些 Import」：函数条目本身 + 它的 outer 链。
 // 用来核对新增导入到底是克隆来的还是合成的。
+static int RunOpcodes(string[] files, string usmapPath)
+{
+    // 统计整个语料里出现过哪些指令（含嵌套），用来判断某个指令到底会不会遇到
+    var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+    var usmap = new Usmap(usmapPath);
+
+    foreach (var file in files)
+    {
+        var uexp = Path.ChangeExtension(file, ".uexp");
+        if (!File.Exists(uexp))
+        {
+            continue;
+        }
+
+        var asset = new UAsset(file, EngineVersion.VER_UE5_6, usmap);
+        foreach (var fn in asset.Exports.OfType<FunctionExport>().Where(f => f.ScriptBytecode is { Length: > 0 }))
+        {
+            foreach (var expr in ExpressionWalker.Walk(fn.ScriptBytecode!))
+            {
+                counts[expr.Inst] = counts.TryGetValue(expr.Inst, out var c) ? c + 1 : 1;
+            }
+        }
+    }
+
+    Console.WriteLine($"资产 {files.Length}，指令种类 {counts.Count}");
+    foreach (var kv in counts.OrderByDescending(k => k.Value))
+    {
+        Console.WriteLine($"  {kv.Value,8}  {kv.Key}");
+    }
+
+    return 0;
+}
+
 static int RunVars(string[] files, string usmapPath, string function)
 {
     var workDir = Path.Combine(Path.GetTempPath(), "kismet-vars-" + Guid.NewGuid().ToString("N")[..8]);

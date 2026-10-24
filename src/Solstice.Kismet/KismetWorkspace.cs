@@ -55,13 +55,28 @@ public sealed class KismetWorkspace
         .Select(x => x.ObjectName.ToString())
         .ToArray();
 
-    /// <summary>某个函数里出现过的变量名（来自字节码里的属性指针）。</summary>
+    /// <summary>
+    /// 某个函数里出现过的变量名（**短名**，即 FFieldPath 最后一段）。
+    ///
+    /// <para>
+    /// 节点模型里的变量名一律是短名（见 <c>KismetDecompiler.TargetName</c>），
+    /// 所以这里也返回短名；要看完整路径与 ResolvedOwner 用 <see cref="DescribeVariables"/>。
+    /// </para>
+    /// </summary>
     public IReadOnlyList<string> Variables(string functionName)
     {
         var fn = FindFunction(functionName);
-        return fn is null
-            ? []
-            : ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!).Keys.ToArray();
+        if (fn is null)
+        {
+            return [];
+        }
+
+        return ExpressionWalker.CollectVariables(fn.ScriptBytecode!)
+            .Select(v => v.Variable?.New?.Path is { Length: > 0 } path ? path[^1].ToString() : null)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray()!;
     }
 
     /// <summary>某个函数当前的表达式条数（用于「改前/改后」对比）。</summary>
@@ -484,6 +499,18 @@ public sealed class KismetWorkspace
     /// </para>
     /// </summary>
     public PointerArg EnsureLocalVariable(string functionName, string variableName)
+        => EnsureVariable(functionName, variableName, instance: false);
+
+    /// <summary>
+    /// 取（或构造）变量指针。<paramref name="instance"/> 为 true 时构造**成员变量**
+    /// （<c>ResolvedOwner</c> 指向本类导出，实测为 1）；否则构造局部变量
+    /// （<c>ResolvedOwner</c> 指向该函数导出）。
+    ///
+    /// <para>
+    /// 名字已在字节码里出现过就复用原指针（连同它的形态：局部 / 成员 / out / CDO 默认值）。
+    /// </para>
+    /// </summary>
+    public PointerArg EnsureVariable(string functionName, string variableName, bool instance)
     {
         var fn = FindFunction(functionName)
                  ?? throw new InvalidOperationException($"找不到函数: {functionName}");
@@ -491,22 +518,49 @@ public sealed class KismetWorkspace
         var existing = ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!);
         if (existing.TryGetValue(variableName, out var pointer))
         {
-            return new PointerArg(pointer, variableName);
+            var kind = ExpressionWalker.CollectVariables(fn.ScriptBytecode!)
+                .FirstOrDefault(v => v.Variable?.New?.Path is { Length: > 0 } p
+                                     && string.Equals(p[^1].ToString(), variableName, StringComparison.Ordinal));
+
+            return kind switch
+            {
+                EX_InstanceVariable => new PointerArg(pointer, variableName, Instance: true),
+                EX_LocalOutVariable => new PointerArg(pointer, variableName, Out: true),
+                EX_DefaultVariable => new PointerArg(pointer, variableName, Default: true),
+                _ => new PointerArg(pointer, variableName)
+            };
         }
 
-        var exportIndex = _asset.Exports.IndexOf(fn) + 1;
-        if (exportIndex <= 0)
+        // 新建：owner 取「函数导出」或「本类导出」
+        var ownerIndex = instance ? ClassExportIndex() : _asset.Exports.IndexOf(fn) + 1;
+        if (ownerIndex <= 0)
         {
-            throw new InvalidOperationException($"函数 {functionName} 不在导出表里，无法确定局部变量归属");
+            throw new InvalidOperationException(
+                $"无法确定 {variableName} 的归属（instance={instance}，函数={functionName}）");
         }
 
         return new PointerArg(
             new KismetPropertyPointer(new FFieldPath
             {
                 Path = [new FName(_asset, variableName)],
-                ResolvedOwner = new FPackageIndex(exportIndex)
+                ResolvedOwner = new FPackageIndex(ownerIndex)
             }),
-            variableName);
+            variableName,
+            Instance: instance);
+    }
+
+    /// <summary>本类导出的索引（成员变量的 ResolvedOwner）。取第一个 Class 导出。</summary>
+    private int ClassExportIndex()
+    {
+        for (var i = 0; i < _asset.Exports.Count; i++)
+        {
+            if (_asset.Exports[i] is ClassExport)
+            {
+                return i + 1;
+            }
+        }
+
+        return 0;
     }
 
     /// <summary>
