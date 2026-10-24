@@ -69,6 +69,10 @@ public static class Program
             }
         }
 
+        // stdin 关闭即客户端断开：显式退出，避免残留进程占住 dll（会让下一次 build 失败，
+        // 也会在 MCP 客户端反复重连时堆积）。
+        stdout.Flush();
+        Environment.Exit(0);
         return 0;
     }
 

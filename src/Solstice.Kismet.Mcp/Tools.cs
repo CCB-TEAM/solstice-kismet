@@ -188,7 +188,8 @@ internal static class Tools
                 throw new InvalidOperationException($"缺少 .uexp: {uexp}");
             }
 
-            var workDir = Path.Combine(WorkRoot, Guid.NewGuid().ToString("N")[..8]);
+            // 按资产路径固定工作目录：避免每次调用都新建一个（会无限堆积）
+            var workDir = Path.Combine(WorkRoot, StableKey(assetPath));
             ws = KismetWorkspace.Open(
                 File.ReadAllBytes(assetPath),
                 File.ReadAllBytes(uexp),
@@ -217,6 +218,13 @@ internal static class Tools
         }
 
         return ws;
+    }
+
+    /// <summary>资产路径 → 稳定的短目录名（避免工作目录无限增长）。</summary>
+    private static string StableKey(string path)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(path));
+        return Convert.ToHexString(bytes)[..12].ToLowerInvariant();
     }
 
     private static string Required(JsonObject args, string name)
