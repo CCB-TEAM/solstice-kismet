@@ -117,7 +117,7 @@ public static class KismetDecompiler
                 case EX_LocalFinalFunction localFinal:
                 {
                     var lfName = options.ResolveImport?.Invoke(localFinal.StackNode) ?? $"<import {localFinal.StackNode?.Index}>";
-                    nodes.Add(new LocalFinalCallNode(lfName, ToArgs(localFinal.Parameters, options)));
+                    nodes.Add(new LocalFinalCallNode(lfName, ToArgs(localFinal.Parameters, options), localFinal.StackNode));
                     i++;
                     continue;
                 }
@@ -125,7 +125,7 @@ public static class KismetDecompiler
                 case EX_CallMath math:
                 {
                     var mathName = options.ResolveImport?.Invoke(math.StackNode) ?? $"<import {math.StackNode?.Index}>";
-                    nodes.Add(new MathCallNode(mathName, ToArgs(math.Parameters, options)));
+                    nodes.Add(new MathCallNode(mathName, ToArgs(math.Parameters, options), math.StackNode));
                     i++;
                     continue;
                 }
@@ -133,7 +133,7 @@ public static class KismetDecompiler
                 case EX_FinalFunction final:
                 {
                     var name = options.ResolveImport?.Invoke(final.StackNode) ?? $"<import {final.StackNode?.Index}>";
-                    nodes.Add(new CallNode(name, ToArgs(final.Parameters, options)));
+                    nodes.Add(new CallNode(name, ToArgs(final.Parameters, options), null, final.StackNode));
                     i++;
                     continue;
                 }

@@ -143,6 +143,10 @@ public static class KismetCompiler
         /// 把数据流参数转成表达式。支持嵌套调用（<see cref="CallArg"/>），
         /// 这样一个调用的返回值可以直接作为另一个调用的参数或对象。
         /// </summary>
+        /// <summary>优先用节点保留的 StackNode，否则按名字查 Import 索引。</summary>
+        FPackageIndex StackOf(string name, FPackageIndex? explicitIndex)
+            => explicitIndex ?? (functions is not null && functions.TryGetValue(name, out var idx) ? idx : new FPackageIndex(0));
+
         /// <summary>变量表达式的三种形态：局部 / 实例 / 函数输出参数。</summary>
         static KismetExpression TargetExpr(PointerArg? kind, KismetPropertyPointer pointer)
             => kind is { Out: true } ? new EX_LocalOutVariable { Variable = pointer }
@@ -227,19 +231,11 @@ public static class KismetCompiler
         {
             switch (node)
             {
-                case CallNode c when functions is not null && functions.TryGetValue(c.Function, out var fnIndex):
-                    // 函数调用：StackNode 指向 Import 表里的函数，参数在 Parameters 里
-                    result.Add(new EX_FinalFunction { StackNode = fnIndex, Parameters = BuildArgs(c) });
-                    break;
-
                 case CallNode c:
-                    foreach (var a in c.Args)
-                    {
-                        EmitArg(a);
-                    }
-
-                    result.Add(new EX_Nothing());
+                    // 函数调用：StackNode 指向 Import 表里的函数，参数在 Parameters 里
+                    result.Add(new EX_FinalFunction { StackNode = StackOf(c.Function, c.StackNode), Parameters = BuildArgs(c) });
                     break;
+
 
                 case AssignNode a:
                 {
@@ -316,20 +312,20 @@ public static class KismetCompiler
                     });
                     break;
 
-                case MathCallNode mc when functions is not null && functions.TryGetValue(mc.Function, out var mathFn):
+                case MathCallNode mc:
                     // 运算符式调用：不需要 context
                     result.Add(new EX_CallMath
                     {
-                        StackNode = mathFn,
+                        StackNode = StackOf(mc.Function, mc.StackNode),
                         Parameters = BuildArgs(new CallNode(mc.Function, mc.Args))
                     });
                     break;
 
-                case LocalFinalCallNode lf when functions is not null && functions.TryGetValue(lf.Function, out var localFn):
+                case LocalFinalCallNode lf:
                     // 非 native 的 final 函数（脚本函数）
                     result.Add(new EX_LocalFinalFunction
                     {
-                        StackNode = localFn,
+                        StackNode = StackOf(lf.Function, lf.StackNode),
                         Parameters = BuildArgs(new CallNode(lf.Function, lf.Args))
                     });
                     break;

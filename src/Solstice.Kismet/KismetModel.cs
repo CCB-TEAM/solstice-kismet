@@ -120,13 +120,19 @@ public enum CallShape
 }
 
 /// <summary>以另一个调用的返回值作为参数。</summary>
-public sealed record CallArg(string Function, IReadOnlyList<KArg> Args, CallShape Shape, string? ObjectVariable = null)
+public sealed record CallArg(
+    string Function,
+    IReadOnlyList<KArg> Args,
+    CallShape Shape,
+    string? ObjectVariable = null,
+    FPackageIndex? StackNode = null,
+    KArg? ObjectArg = null)
     : KArg(PinType.Object);
 
 /// <summary>节点（编辑器层的逻辑单元，一行一个）。</summary>
 public abstract record KNode(string Title);
 
-public sealed record CallNode(string Function, IReadOnlyList<KArg> Args, string? Owner = null) : KNode(Function);
+public sealed record CallNode(string Function, IReadOnlyList<KArg> Args, string? Owner = null, FPackageIndex? StackNode = null) : KNode(Function);
 
 public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then) : KNode("If");
 
@@ -164,11 +170,11 @@ public sealed record VirtualCallNode(string Function, IReadOnlyList<KArg> Args)
     : KNode($"Virtual {Function}");
 
 /// <summary>非 native 的 final 函数调用，编译成 EX_LocalFinalFunction。</summary>
-public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args)
+public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null)
     : KNode($"LocalFinal {Function}");
 
 /// <summary>运算符式调用，编译成 EX_CallMath（不需要 context）。</summary>
-public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args)
+public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args, FPackageIndex? StackNode = null)
     : KNode($"Math {Function}");
 
 /// <summary>EX_LetBase 家族的赋值种类（都是 VariableExpression + AssignmentExpression 同形）。</summary>
