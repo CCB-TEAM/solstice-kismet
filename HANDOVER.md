@@ -64,6 +64,8 @@ docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
 docs/adding-a-call.md  新增一次调用的数据流向（解析/落表/生成/写回/边界）
 docs/mcp.md            MCP 服务端：启动方式、8 个工具、状态与边界
+skills/blueprint-read-modify/  给 agent 的「读/改蓝图」技能（SKILL.md）
+tools/install-skills.ps1       把 skills/* 同步到 <projectRoot>/.dsh/skills/
 src/Solstice.Kismet.Mcp/  MCP 服务端（stdio JSON-RPC），CI 里跑 --selftest
 ```
 

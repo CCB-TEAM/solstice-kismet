@@ -81,6 +81,15 @@ var (ops2, hex2, _)    = ws.Generate(nodes, "ExecuteUbergraph_card_brawl_test1")
 var saved = ws.Save("/tmp/ws");   // 返回 uasset + uexp 两半，缺一不可
 ```
 
+## Agent 技能
+
+`skills/blueprint-read-modify` 是给 agent 用的「读 / 改蓝图」技能（SKILL.md）：
+读函数、解析引用、看引脚、插入调用、写回验证，以及会静默出错的那些坑。
+
+```powershell
+.\tools\install-skills.ps1     # 同步到 <projectRoot>/.dsh/skills/（DSH 的技能发现路径）
+```
+
 ## MCP 服务端
 
 `src/Solstice.Kismet.Mcp` 把本库暴露成 MCP 工具（stdio + JSON-RPC 2.0），
