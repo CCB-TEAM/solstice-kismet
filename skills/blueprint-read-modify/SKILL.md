@@ -258,8 +258,9 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 - `StructProperty` 的类型在 jmap 里 `class = null`：只知道"是结构体 + 字节大小"，不知道具体结构
 - **临时变量按类型直接构造**：`withResult` 会给 `CallFunc_*` 补一条 `FProperty`——基础类型用
   UAssetAPI 的 Property 子类 + 实测 `ElementSize`，对象/枚举用签名里的 class/enum 补导入。
-  结构体 / 容器 / 委托仍只造指针、不声明（jmap 里 `class = null`，拿不到结构或元素类型，
-  硬造出来是错的），`declaration` 字段会写明原因
+  结构体 / 容器 / 委托：优先复用资产里**同一个函数**已有的 `CallFunc_<函数>_*` 属性，
+  否则用 `resultStruct=<结构名>` 显式指定（名字用 `kismet_struct_members` 从 usmap 查），
+  都不成立才不声明（`declaration` 字段写明原因）
 - **参数值只覆盖标量 + 变量 + 嵌套调用**：text / struct / array / map / set 仍需占位
 - **节点路径按当前反编译结果编号，不跨编辑稳定**：批量改动要先读完再改
 - **蓝图资产定义的结构（`S_*`）不在 usmap** 里，成员查不到

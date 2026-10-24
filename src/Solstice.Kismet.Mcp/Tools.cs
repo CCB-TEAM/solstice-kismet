@@ -116,7 +116,8 @@ internal static class Tools
 
         if (withResult)
         {
-            var inserted = ws.InsertCallWithResult(function, callee, callArgs.ToArray());
+            var resultStruct = Optional(args, "resultStruct");
+            var inserted = ws.InsertCallWithResult(function, callee, resultStruct, callArgs.ToArray());
             var sbResult = new StringBuilder();
             sbResult.AppendLine("已插入（结果存进临时变量）");
             sbResult.AppendLine($"variable   : {inserted.Variable}");

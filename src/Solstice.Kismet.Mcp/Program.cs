@@ -258,6 +258,7 @@ public static class Program
                     ["owner"] = Prop("string", "被调函数归属类（可选）"),
                     ["before"] = Prop("string", "插到这个节点路径之前（可选，默认函数末尾；路径见 kismet_decompile 的 #0.2 标注）"),
                     ["withResult"] = Prop("boolean", "true = 结果存进 CallFunc_<函数>_<引脚> 临时变量"),
+                    ["resultStruct"] = Prop("string", "withResult 时临时变量的结构名（jmap 里结构体返回没有类型名；可用 kismet_struct_members 查 usmap）"),
                     ["args"] = new JsonObject
                     {
                         ["type"] = "array",

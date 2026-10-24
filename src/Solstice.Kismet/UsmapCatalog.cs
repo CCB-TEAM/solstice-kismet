@@ -57,6 +57,32 @@ public sealed class UsmapCatalog
             $"{nameOrPath} 匹配到 {matches.Length} 个结构：\n  " + string.Join("\n  ", matches));
     }
 
+    /// <summary>
+    /// 解析成**带包路径**的全名。
+    ///
+    /// <para>
+    /// usmap 里同一个结构可能同时有短名（<c>DateTime</c>）与全路径（<c>/Script/CoreUObject.DateTime</c>）
+    /// 两条 schema；<see cref="ResolveSchema"/> 会先命中短名，拿不到包路径。这里优先返回全路径，
+    /// 拿不到才退回短名（调用方再用资产里已有的导入兜底）。
+    /// </para>
+    /// </summary>
+    public string ResolveSchemaPath(string nameOrPath)
+    {
+        var resolved = ResolveSchema(nameOrPath);
+        if (resolved.Contains('.'))
+        {
+            return resolved;
+        }
+
+        var matches = _usmap.Schemas.Keys
+            .Where(k => k.Contains('.')
+                        && string.Equals(k[(k.LastIndexOf('.') + 1)..], resolved, StringComparison.Ordinal))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToArray();
+
+        return matches.Length == 1 ? matches[0] : resolved;
+    }
+
     /// <summary>列出某个结构的成员（名字 + 类型），按声明顺序。</summary>
     public IReadOnlyList<StructMember> MembersOf(string nameOrPath)
     {

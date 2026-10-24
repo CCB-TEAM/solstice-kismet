@@ -36,7 +36,7 @@ dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --sel
 | `kismet_decompile` | `asset`, `usmap`, `function` | 反编译成节点树，**每个节点带路径 `#0.2`**，调用节点带参数；退化时会明说「已退回扁平」 |
 | `kismet_resolve_function` | `asset`, `usmap`, `name`, `owner?`, `catalog?` | 解析成引用（名字 + 归属 + 包索引）；同名歧义会报错列候选 |
 | `kismet_plan_call` | `asset`, `usmap`, `catalog`, `name`, `owner?` | 调用的形态与引脚，标出哪些参数只是占位 |
-| `kismet_insert_call` | `asset`, `usmap`, `catalog`, `function`, `callee`, `owner?`, `before?`, `withResult?`, `args?` | 插入一次调用：默认末尾、`before=<路径>` 插到指定节点前；`args` 给具体参数值（不给就按签名补占位）；`withResult` 把结果存进临时变量并**声明**它 |
+| `kismet_insert_call` | `asset`, `usmap`, `catalog`, `function`, `callee`, `owner?`, `before?`, `withResult?`, `resultStruct?`, `args?` | 插入一次调用：默认末尾、`before=<路径>` 插到指定节点前；`args` 给具体参数值（不给就按签名补占位）；`withResult` 把结果存进临时变量并**声明**它（结构体返回值用 `resultStruct=<结构名>` 指定类型） |
 | `kismet_replace_call` | `asset`, `usmap`, `catalog`, `function`, `path`, `callee`, `owner?`, `args?` | 把某个节点上已有的调用换成另一次调用（保留原形态与上下文） |
 | `kismet_delete_node` | `asset`, `usmap`, `function`, `path` | 删掉路径指向的节点（`Return` 不允许删） |
 | `kismet_bake_ubergraph` | `asset`, `usmap`, `function` | 重烘 ubergraph，报「段起始偏移」+「调用点入口表」两份（两者本就可以不等） |
@@ -96,6 +96,9 @@ dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --sel
 - **临时变量的声明**：按类型**直接构造** `FProperty`（基础类型用 UAssetAPI 对应子类 +
   实测 `ElementSize`；对象类用签名里的 class 补类导入填 `PropertyClass`；枚举补枚举导入填
   `Enum` + `UnderlyingType`），公共字段是实测值（`RF_Public` + `CPF_None` + `ArrayDim=TArray`）。
-  **结构体 / 数组 / map / set / 委托仍不自动声明**——jmap 里 `class = null`，拿不到结构或元素类型，
-  硬造出来是错的；这时 `declaration` 字段会写明原因
+  结构体 / 容器 / 委托的类型 jmap 里没有（`class = null`），走两条兜底：
+  ① 资产里**已经调用过同一个函数**时，复用那条现成的 `CallFunc_<函数>_*` 属性（`Struct`/`Inner` 准确）；
+  ② 调用方显式给 `resultStruct=<结构名或全路径>`，名字用 usmap 校验（`kismet_struct_members` 可查），
+  导入按 `/Script/…` → `ScriptStruct`、`/Game/…` → `UserDefinedStruct` 补。
+  两条都不成立才不声明，并把原因写清楚
 - 节点路径按「当前反编译结果」编号，**不跨编辑稳定**；批量改动请一次读完再改

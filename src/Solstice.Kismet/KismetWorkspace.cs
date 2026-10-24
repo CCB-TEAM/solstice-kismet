@@ -679,6 +679,17 @@ public sealed class KismetWorkspace
         string functionName,
         FunctionRef callee,
         params KArg[] args)
+        => InsertCallWithResult(functionName, callee, (string?)null, args);
+
+    /// <summary>
+    /// 同上，另外可以指定结果变量的结构类型（<paramref name="resultStruct"/>，名字来自 usmap）。
+    /// jmap 里结构体返回值没有结构名，这个参数是唯一能显式补上的途径。
+    /// </summary>
+    public InsertedCall InsertCallWithResult(
+        string functionName,
+        FunctionRef callee,
+        string? resultStruct,
+        params KArg[] args)
     {
         var returnType = ResultTypeOf(callee)
                          ?? throw new InvalidOperationException(
@@ -698,7 +709,7 @@ public sealed class KismetWorkspace
         }
 
         // 先声明再赋值：只造指针、不往属性表里加条目，运行时解析不到这个变量
-        var declaration = DeclareLocalVariable(functionName, name, returnType);
+        var declaration = DeclareLocalVariable(functionName, name, returnType, callee, resultStruct);
 
         var result = AssignCallResult(functionName, callee, name, args);
         return new InsertedCall(name, returnType, result.Opcodes, result.Hex, result.Bytes, declaration);
@@ -1266,12 +1277,24 @@ public sealed class KismetWorkspace
     /// UAssetAPI 对应的 Property 子类 + 实测的 <c>ElementSize</c>；
     /// 对象类用签名里的 class 补一条类导入填 <c>PropertyClass</c>；
     /// 枚举用签名里的 enum 补一条枚举导入填 <c>Enum</c> + <c>UnderlyingType</c>。
-    /// 结构体 / 容器 / 委托仍做不了——jmap 里 <c>class = null</c>，拿不到结构或元素类型。
+    /// </para>
+    ///
+    /// <para>
+    /// 结构体 / 容器 / 委托的类型信息 jmap 里没有（<c>class = null</c>），走两条兜底：
+    /// ① 资产里**已经调用过同一个函数**时，复用那条现成的 <c>CallFunc_&lt;函数&gt;_*</c> 属性
+    /// （它的 <c>Struct</c> / <c>Inner</c> 就是准确类型）；
+    /// ② 调用方显式给 <paramref name="structName"/>（名字可先用 usmap 查，见 <c>kismet_struct_members</c>）。
+    /// 两条都不成立就不声明，并把原因写清楚。
     /// </para>
     ///
     /// <para>返回 null 表示成功；否则返回不能声明的原因（调用方决定是报错还是只警告）。</para>
     /// </summary>
-    public string? DeclareLocalVariable(string functionName, string variableName, FunctionParam? type)
+    public string? DeclareLocalVariable(
+        string functionName,
+        string variableName,
+        FunctionParam? type,
+        FunctionRef? callee = null,
+        string? structName = null)
     {
         var fn = FindFunction(functionName)
                  ?? throw new InvalidOperationException($"找不到函数: {functionName}");
@@ -1288,14 +1311,22 @@ public sealed class KismetWorkspace
             return $"不知道 {variableName} 的类型（被调函数没有返回值签名）";
         }
 
-        var property = CreateProperty(propertyType, type, variableName);
+        var property = CreateProperty(propertyType, type, variableName)
+                       ?? ReuseResultProperty(callee, propertyType, variableName)
+                       ?? CreateStructProperty(propertyType, type, variableName, structName, callee);
+
         if (property is null)
         {
             return propertyType switch
             {
-                "StructProperty" => "结构体的临时变量需要正确的 Struct 类型，jmap 里 class 为 null，不自动声明",
+                "StructProperty" =>
+                    $"结构体的临时变量需要结构类型，jmap 里 class 为 null。" +
+                    (callee is null ? "" : $"资产里也没调用过 {callee.Name} 可供复用；") +
+                    "要声明请传 resultStruct=<结构名>（usmap 里能查到）",
                 "ArrayProperty" or "MapProperty" or "SetProperty" =>
-                    $"{propertyType} 的临时变量需要元素类型，jmap 里拿不到，不自动声明",
+                    $"{propertyType} 的临时变量需要元素类型，jmap 里拿不到。" +
+                    (callee is null ? "" : $"资产里也没调用过 {callee.Name} 可供复用；") +
+                    "要声明请先让同一个函数在资产里出现过，或改用手工声明",
                 "DelegateProperty" => "委托的临时变量需要签名函数，不自动声明",
                 _ => $"{propertyType} 没有对应的 Property 子类可构造"
             };
@@ -1303,6 +1334,110 @@ public sealed class KismetWorkspace
 
         fn.LoadedProperties = [.. properties, property];
         return null;
+    }
+
+    /// <summary>
+    /// 复用资产里**同一个函数的**结果属性（<c>CallFunc_&lt;函数&gt;_*</c>）：
+    /// 它带着准确的 <c>Struct</c> / <c>Inner</c> / <c>PropertyClass</c>，比自己拼可靠。
+    /// </summary>
+    private UAssetAPI.FieldTypes.FProperty? ReuseResultProperty(
+        FunctionRef? callee, string propertyType, string variableName)
+    {
+        if (callee is null)
+        {
+            return null;
+        }
+
+        var prefix = $"CallFunc_{callee.Name}_";
+        var template = _asset.Exports.OfType<StructExport>()
+            .SelectMany(e => e.LoadedProperties ?? [])
+            .FirstOrDefault(p => p.Name.ToString().StartsWith(prefix, StringComparison.Ordinal)
+                                 && string.Equals(p.SerializedType?.Value?.Value, propertyType, StringComparison.Ordinal));
+
+        if (template is null)
+        {
+            return null;
+        }
+
+        var clone = CloneProperty(template);
+        // 只换名字与公共字段；Struct / Inner / PropertyClass 原样保留（这才是复用的意义）
+        return FinishProperty(clone, propertyType, template.ElementSize, variableName);
+    }
+
+    /// <summary>按显式给出的结构名构造 <c>FStructProperty</c>（类型名用 usmap 校验，导入按 /Script 或 /Game 定类）。</summary>
+    private UAssetAPI.FieldTypes.FProperty? CreateStructProperty(
+        string propertyType, FunctionParam? type, string variableName, string? structName, FunctionRef? callee)
+    {
+        if (propertyType != "StructProperty" || string.IsNullOrWhiteSpace(structName))
+        {
+            return null;
+        }
+
+        // 结构名可以给短名或全路径；usmap 里同时有两条 schema 时优先取带包路径的那条
+        var full = Usmap?.ResolveSchemaPath(structName) ?? structName;
+        var dot = full.LastIndexOf('.');
+
+        // 只有短名（usmap 没给出包路径）时，资产里可能已经导入过这个结构，直接用它的导入
+        if (dot <= 0)
+        {
+            var existing = FindStructImport(full);
+            var size0 = type?.Size ?? 0;
+            return existing is null || size0 <= 0
+                ? null
+                : FinishProperty(
+                    new UAssetAPI.FieldTypes.FStructProperty { Struct = existing },
+                    propertyType,
+                    size0,
+                    variableName);
+        }
+
+        var (packagePath, objectName) = (full[..dot], full[(dot + 1)..]);
+
+        // 引擎结构在 /Script 包里（导入类 ScriptStruct），蓝图结构在 /Game 里（UserDefinedStruct）
+        var importClass = packagePath.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase)
+            ? "ScriptStruct"
+            : "UserDefinedStruct";
+
+        var package = ImportIndex.EnsurePackage(_asset, packagePath);
+        var structIndex = ImportIndex.EnsureImportedObject(_asset, objectName, package, importClass);
+
+        var size = type?.Size ?? 0;
+        if (size <= 0)
+        {
+            return null;
+        }
+
+        return FinishProperty(
+            new UAssetAPI.FieldTypes.FStructProperty { Struct = structIndex },
+            propertyType,
+            size,
+            variableName);
+    }
+
+    /// <summary>资产里已有的结构导入（ScriptStruct / UserDefinedStruct）按对象名找。</summary>
+    private FPackageIndex? FindStructImport(string objectName)
+    {
+        for (var i = 0; i < _asset.Imports.Count; i++)
+        {
+            var im = _asset.Imports[i];
+            var cls = im.ClassName?.ToString();
+            if ((cls == "ScriptStruct" || cls == "UserDefinedStruct")
+                && im.ObjectName?.ToString() == objectName)
+            {
+                return new FPackageIndex(-(i + 1));
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>浅拷贝一条属性（只换名字；Write 只读字段，不共享可变状态）。</summary>
+    private static UAssetAPI.FieldTypes.FProperty CloneProperty(UAssetAPI.FieldTypes.FProperty source)
+    {
+        var method = typeof(object).GetMethod(
+            "MemberwiseClone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("拿不到 MemberwiseClone");
+        return (UAssetAPI.FieldTypes.FProperty)method.Invoke(source, null)!;
     }
 
     /// <summary>
@@ -1336,6 +1471,13 @@ public sealed class KismetWorkspace
     private UAssetAPI.FieldTypes.FProperty? CreateProperty(string typeName, FunctionParam? type, string name)
     {
         if (!PropertyElementSizes.TryGetValue(typeName, out var elementSize))
+        {
+            return null;
+        }
+
+        // 这几种光有外壳没有内层类型（Inner / ElementProp / KeyProp / SignatureFunction），
+        // 造出来是错的——交给「复用同一个函数的结果属性」那条路
+        if (typeName is "ArrayProperty" or "SetProperty" or "MapProperty" or "DelegateProperty")
         {
             return null;
         }
