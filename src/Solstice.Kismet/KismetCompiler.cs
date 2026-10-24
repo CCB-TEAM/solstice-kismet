@@ -359,13 +359,7 @@ public static class KismetCompiler
                 case IfNode f:
                 {
                     // 条件内嵌在 EX_JumpIfNot 里，不单独入列
-                    KismetExpression cond = f.Condition switch
-                    {
-                        IntArg i => new EX_IntConst { Value = i.Value },
-                        LocalArg l when variables is not null && variables.TryGetValue(l.Name, out var lp)
-                            => new EX_LocalVariable { Variable = lp },
-                        _ => new EX_Nothing()
-                    };
+                    KismetExpression cond = ToExpr(f.Condition);
 
                     var jn = new EX_JumpIfNot { BooleanExpression = cond };
                     result.Add(jn);
@@ -420,13 +414,7 @@ public static class KismetCompiler
                     // 循环：条件 → JumpIfNot(退出) → 循环体 → Jump(回条件) → 退出落点
                     var startIdx = result.Count;
 
-                    KismetExpression cond = lp.Condition switch
-                    {
-                        IntArg i => new EX_IntConst { Value = i.Value },
-                        LocalArg l when variables is not null && variables.TryGetValue(l.Name, out var lpPtr)
-                            => new EX_LocalVariable { Variable = lpPtr },
-                        _ => new EX_Nothing()
-                    };
+                    KismetExpression cond = ToExpr(lp.Condition);
 
                     var jn = new EX_JumpIfNot { BooleanExpression = cond };
                     result.Add(jn);
