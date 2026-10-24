@@ -200,6 +200,19 @@ public static class KismetCompiler
                 case ByteArg b:
                     return new EX_ByteConst { Value = b.Value };
 
+                case SkipOffsetArg so:
+                    return new EX_SkipOffsetConst { Value = so.Value };
+
+                case VectorArg v:
+                    return new EX_VectorConst { Value = v.Value };
+
+                case ArrayConstArg ac:
+                    return new EX_ArrayConst
+                    {
+                        InnerProperty = ac.Inner,
+                        Elements = ac.Elements.Select(ToExpr).ToArray()
+                    };
+
                 case TextArg t:
                     return new EX_TextConst { Value = t.Value };
 

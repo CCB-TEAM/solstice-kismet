@@ -413,6 +413,9 @@ public static class KismetDecompiler
         EX_DoubleConst d => new DoubleArg(d.Value),
         EX_FloatConst f2 => new FloatArg(f2.Value),
         EX_ByteConst b => new ByteArg(b.Value),
+        EX_SkipOffsetConst so => new SkipOffsetArg(so.Value),
+        EX_VectorConst v => new VectorArg(v.Value),
+        EX_ArrayConst ac => new ArrayConstArg(ac.InnerProperty!, ToArgs(ac.Elements, options)),
         EX_TextConst t => new TextArg(t.Value),
         EX_StructConst st => new StructConstArg(st.Struct, st.StructSize, ToArgs(st.Value, options)),
         EX_StructMemberContext sm => new StructMemberArg(

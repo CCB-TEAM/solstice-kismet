@@ -94,6 +94,16 @@ public sealed record DoubleArg(double Value) : KArg(PinType.Float);
 /// <summary>单精度字面量，对应 EX_FloatConst。</summary>
 public sealed record FloatArg(float Value) : KArg(PinType.Float);
 
+/// <summary>跳过偏移常量，对应 EX_SkipOffsetConst。</summary>
+public sealed record SkipOffsetArg(uint Value) : KArg(PinType.Int);
+
+/// <summary>向量字面量，对应 EX_VectorConst。</summary>
+public sealed record VectorArg(FVector Value) : KArg(PinType.Struct);
+
+/// <summary>数组字面量，对应 EX_ArrayConst。</summary>
+public sealed record ArrayConstArg(KismetPropertyPointer Inner, IReadOnlyList<KArg> Elements)
+    : KArg(PinType.Struct);
+
 /// <summary>字节字面量，对应 EX_ByteConst。</summary>
 public sealed record ByteArg(byte Value) : KArg(PinType.Int);
 
