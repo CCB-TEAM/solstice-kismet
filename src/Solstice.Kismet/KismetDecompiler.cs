@@ -260,18 +260,27 @@ public static class KismetDecompiler
         return offsets;
     }
 
+    /// <summary>
+    /// 把字节偏移映射回表达式下标。
+    ///
+    /// <para>
+    /// 跳转目标理论上总是落在某条表达式的起始处，但资产里也可能出现落在两条之间
+    /// （或指向末尾）的情况——那就取第一条起始偏移 &gt;= target 的表达式，
+    /// 而不是直接判失败，否则整个分支结构会丢失。
+    /// </para>
+    /// </summary>
     private static int IndexOfOffset(uint[] offsets, uint target)
     {
         for (var i = 0; i < offsets.Length; i++)
         {
-            if (offsets[i] == target)
+            if (offsets[i] >= target)
             {
                 return i;
             }
         }
 
-        // 落在末尾（跳过最后一个表达式）
-        return target >= offsets[^1] ? offsets.Length : -1;
+        // 越过末尾：跳到结束（跳过最后一条）
+        return offsets.Length;
     }
 
     // ---- 表达式 → 参数 ----
