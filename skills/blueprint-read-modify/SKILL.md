@@ -13,14 +13,41 @@ description: 'Use when reading or editing Unreal Engine blueprint bytecode (Kism
 
 ## 0. 准备三样输入
 
+**本技能不含任何数据**——没有资产、没有映射、没有签名表。它只有流程与约束，
+三样输入必须从**目标游戏**自己产出。
+
 | 输入 | 是什么 | 从哪来 |
 |---|---|---|
 | **资产** | `.uasset` + 同名 `.uexp`（**缺一不可**） | FModel 导出目录、或 pak 解包结果 |
 | **usmap** | UE 映射文件（结构体/类 schema） | FModel 的 `Mappings.usmap`、CUE4Parse 的 mappings dump |
-| **jmap** | 函数签名表（`functions.json` + `objects.json`） | [solstice-jmap](https://github.com/CCB-TEAM/solstice-jmap) 从 usmap + 可执行文件生成 |
+| **jmap** | 函数签名表（`functions.json` + `objects.json`） | 见下方两步管线 |
 
 jmap **只在「新增调用」时需要**（函数归属、`FUNC_Static`、参数与返回类型）；
 纯读 / 纯反编译不需要它。
+
+### jmap 的两步管线（重要，容易搞错来源）
+
+```powershell
+# ① 从游戏可执行文件导出活对象转储（trumank/jmap，Rust 工具）
+#    ⚠️ PATH 上的 jmap 很可能不是它——JDK 也有个 jmap（Java 内存映射工具）
+jmap <Game>-Win64-Shipping.exe -o game.jmap      # 产出几十 MB 的 .jmap
+
+# ② 合并 AssetRegistry，得到可查询的两张表
+JmapExtractor <game.jmap> <outDir> [AssetRegistry.bin]
+```
+
+`JmapExtractor` 来自 [solstice-jmap](https://github.com/CCB-TEAM/solstice-jmap)。
+
+产出与边界：
+
+| 文件 | 内容 | 不给 `AssetRegistry.bin` 时 |
+|---|---|---|
+| `objects.json` | 对象表：`/Script` 来自 jmap、`/Game` 来自 registry | 只有 `/Script` |
+| `functions.json` | 函数签名：**始终只有 `/Script`** | 同样只有 `/Script` |
+
+**`functions.json` 里没有 `/Game` 函数**——registry 只给"有哪些资产"，不给函数签名。
+后果：调 native/script 函数可以靠 jmap；调**本资产**的蓝图函数走"导出"分支（不需要 jmap）；
+调**别的资产**的蓝图函数，两个来源都没有签名，解析会失败。
 
 下面用变量代表它们，按你的环境替换：
 
