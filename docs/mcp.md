@@ -93,12 +93,10 @@ dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --sel
 - 新增调用的**字节可读回**已验证（1,737/1,737 资产），**UE 运行时行为未验证**
 - `StructProperty` 的具体结构名在 jmap 里是 `null`，只能给到字节大小
 - 资产定义的结构（`S_*`）不在 usmap 里，查不到成员
-- **临时变量的声明**：按类型**直接构造** `FProperty`（基础类型用 UAssetAPI 对应子类 +
-  实测 `ElementSize`；对象类用签名里的 class 补类导入填 `PropertyClass`；枚举补枚举导入填
-  `Enum` + `UnderlyingType`），公共字段是实测值（`RF_Public` + `CPF_None` + `ArrayDim=TArray`）。
-  结构体 / 容器 / 委托的类型 jmap 里没有（`class = null`），走两条兜底：
-  ① 资产里**已经调用过同一个函数**时，复用那条现成的 `CallFunc_<函数>_*` 属性（`Struct`/`Inner` 准确）；
-  ② 调用方显式给 `resultStruct=<结构名或全路径>`，名字用 usmap 校验（`kismet_struct_members` 可查），
-  导入按 `/Script/…` → `ScriptStruct`、`/Game/…` → `UserDefinedStruct` 补。
-  两条都不成立才不声明，并把原因写清楚
+- **临时变量的声明**：按 jmap 的类型描述**递归构造** `FProperty`——基础类型用 UAssetAPI 对应子类 +
+  实测 `ElementSize`；结构体用 jmap 的 `struct` 路径补 `ScriptStruct` / `UserDefinedStruct` 导入；
+  容器（array / set / map）用 jmap 的 `inner` / `key` / `value` 递归建内层；对象/枚举补类/枚举导入。
+  公共字段是实测值（`RF_Public` + `CPF_None` + `ArrayDim=TArray`）。
+  **老 catalog 缺这些字段时**（jmap 产物早于 2026-10-24）走两条兜底：复用资产里同一个函数已有的
+  `CallFunc_<函数>_*` 属性；或用 `resultStruct=<结构名>` 显式指定。都没有才不声明，并写明原因
 - 节点路径按「当前反编译结果」编号，**不跨编辑稳定**；批量改动请一次读完再改

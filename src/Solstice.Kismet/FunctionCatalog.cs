@@ -3,6 +3,13 @@ using System.Text.Json;
 namespace Solstice.Kismet;
 
 /// <summary>函数的一个参数（来自 jmap 的函数表）。</summary>
+/// <param name="Class">
+/// 对象类的路径；**结构体则是结构路径**（jmap 的 <c>struct</c> 字段，老产物里为 null）。
+/// </param>
+/// <param name="Enum">枚举路径（ByteProperty / EnumProperty）。</param>
+/// <param name="Inner">数组的元素类型（jmap 的 <c>inner</c>）。</param>
+/// <param name="Key">Set 的元素类型 / Map 的键类型（jmap 的 <c>key_prop</c>）。</param>
+/// <param name="Value">Map 的值类型（jmap 的 <c>value_prop</c>）。</param>
 public sealed record FunctionParam(
     string Name,
     string Type,
@@ -10,7 +17,10 @@ public sealed record FunctionParam(
     string Class,
     string Enum,
     int Offset = 0,
-    int Size = 0);
+    int Size = 0,
+    FunctionParam? Inner = null,
+    FunctionParam? Key = null,
+    FunctionParam? Value = null);
 
 /// <summary>函数签名。</summary>
 public sealed record FunctionSignature(
@@ -96,14 +106,7 @@ public sealed class FunctionCatalog
                 {
                     foreach (var p in ps.EnumerateArray())
                     {
-                        parameters.Add(new FunctionParam(
-                            Str(p, "name"),
-                            Str(p, "type"),
-                            Str(p, "dir"),
-                            Str(p, "class"),
-                            Str(p, "enum"),
-                            Int(p, "offset"),
-                            Int(p, "size")));
+                        parameters.Add(ReadParam(p));
                     }
                 }
 
@@ -115,6 +118,27 @@ public sealed class FunctionCatalog
 
         return catalog;
     }
+
+    /// <summary>
+    /// 读一个参数，连容器里的元素类型一起读。
+    /// 老产物没有 <c>inner</c> / <c>key</c> / <c>value</c>，读出来是 null——上层要能容忍。
+    /// </summary>
+    private static FunctionParam ReadParam(JsonElement p) => new(
+        Str(p, "name"),
+        Str(p, "type"),
+        Str(p, "dir"),
+        Str(p, "class"),
+        Str(p, "enum"),
+        Int(p, "offset"),
+        Int(p, "size"),
+        Nested(p, "inner"),
+        Nested(p, "key"),
+        Nested(p, "value"));
+
+    private static FunctionParam? Nested(JsonElement p, string name)
+        => p.TryGetProperty(name, out var nested) && nested.ValueKind == JsonValueKind.Object
+            ? ReadParam(nested)
+            : null;
 
     private static string Str(JsonElement e, string prop)
         => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";

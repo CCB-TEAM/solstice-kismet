@@ -1469,20 +1469,25 @@ public sealed class KismetWorkspace
 
     /// <summary>按类型造一条属性；做不到时返回 null（原因由调用方给）。</summary>
     private UAssetAPI.FieldTypes.FProperty? CreateProperty(string typeName, FunctionParam? type, string name)
+        => BuildProperty(type ?? new FunctionParam(name, typeName, "return", "", ""), name);
+
+    /// <summary>
+    /// 按 jmap 的类型描述递归造一条属性。
+    ///
+    /// <para>
+    /// jmap 现在带完整类型：结构体有 <c>struct</c>（结构路径）、容器有 <c>inner</c> /
+    /// <c>key_prop</c> / <c>value_prop</c>、对象有 <c>property_class</c>、枚举有 <c>enum</c>。
+    /// 缺其中任何一项就返回 null——**不猜**。
+    /// </para>
+    /// </summary>
+    private UAssetAPI.FieldTypes.FProperty? BuildProperty(FunctionParam type, string name)
     {
-        if (!PropertyElementSizes.TryGetValue(typeName, out var elementSize))
-        {
-            return null;
-        }
+        // 尺寸优先用 jmap 给的字节大小（容器元素也一样），没有再退回实测表
+        var elementSize = type.Size > 0
+            ? type.Size
+            : PropertyElementSizes.TryGetValue(type.Type, out var known) ? known : 0;
 
-        // 这几种光有外壳没有内层类型（Inner / ElementProp / KeyProp / SignatureFunction），
-        // 造出来是错的——交给「复用同一个函数的结果属性」那条路
-        if (typeName is "ArrayProperty" or "SetProperty" or "MapProperty" or "DelegateProperty")
-        {
-            return null;
-        }
-
-        UAssetAPI.FieldTypes.FProperty property = typeName switch
+        UAssetAPI.FieldTypes.FProperty? property = type.Type switch
         {
             "BoolProperty" => new UAssetAPI.FieldTypes.FBoolProperty
             {
@@ -1493,44 +1498,91 @@ public sealed class KismetWorkspace
                 NativeBool = true,
                 Value = true
             },
+
+            "StructProperty" => StructIndex(type.Class) is { } structIndex
+                ? new UAssetAPI.FieldTypes.FStructProperty { Struct = structIndex }
+                : null,
+
+            "ArrayProperty" => type.Inner is { } inner && BuildProperty(inner, name) is { } innerProp
+                ? new UAssetAPI.FieldTypes.FArrayProperty { Inner = innerProp }
+                : null,
+
+            "SetProperty" => (type.Key ?? type.Inner) is { } element && BuildProperty(element, name) is { } elementProp
+                ? new UAssetAPI.FieldTypes.FSetProperty { ElementProp = elementProp }
+                : null,
+
+            "MapProperty" => type.Key is { } key && type.Value is { } value
+                             && BuildProperty(key, $"{name}_Key") is { } keyProp
+                             && BuildProperty(value, name) is { } valueProp
+                ? new UAssetAPI.FieldTypes.FMapProperty { KeyProp = keyProp, ValueProp = valueProp }
+                : null,
+
             "ObjectProperty" => new UAssetAPI.FieldTypes.FObjectProperty
             {
-                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+                PropertyClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0)
             },
             "ClassProperty" => new UAssetAPI.FieldTypes.FClassProperty
             {
-                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0),
-                MetaClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+                PropertyClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0),
+                MetaClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0)
             },
             "SoftObjectProperty" => new UAssetAPI.FieldTypes.FSoftObjectProperty
             {
-                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+                PropertyClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0)
             },
             "SoftClassProperty" => new UAssetAPI.FieldTypes.FSoftClassProperty
             {
-                PropertyClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0),
-                MetaClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+                PropertyClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0),
+                MetaClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0)
             },
             "InterfaceProperty" => new UAssetAPI.FieldTypes.FInterfaceProperty
             {
-                InterfaceClass = ClassIndexOf(type?.Class) ?? new FPackageIndex(0)
+                InterfaceClass = ClassIndexOf(type.Class) ?? new FPackageIndex(0)
             },
+
             "ByteProperty" => new UAssetAPI.FieldTypes.FByteProperty
             {
-                Enum = EnumIndexOf(type?.Enum) ?? new FPackageIndex(0)
+                Enum = EnumIndexOf(type.Enum) ?? new FPackageIndex(0)
             },
             "EnumProperty" => new UAssetAPI.FieldTypes.FEnumProperty
             {
-                Enum = EnumIndexOf(type?.Enum) ?? new FPackageIndex(0),
+                Enum = EnumIndexOf(type.Enum) ?? new FPackageIndex(0),
                 UnderlyingProp = FinishProperty(
                     new UAssetAPI.FieldTypes.FByteProperty(), "ByteProperty", 1, "UnderlyingType")
             },
+
             // 其余（int / int64 / float / double / str / name / text）UAssetAPI 没有专用子类，
             // 读取时也是退化成 FGenericProperty——写出去必须保持一致
-            _ => new UAssetAPI.FieldTypes.FGenericProperty()
+            _ when PropertyElementSizes.ContainsKey(type.Type) => new UAssetAPI.FieldTypes.FGenericProperty(),
+            _ => null
         };
 
-        return FinishProperty(property, typeName, elementSize, name);
+        return property is null || elementSize <= 0
+            ? null
+            : FinishProperty(property, type.Type, elementSize, name);
+    }
+
+    /// <summary>结构体路径 → 结构导入（<c>/Script/…</c> 是 ScriptStruct，<c>/Game/…</c> 是 UserDefinedStruct）。</summary>
+    private FPackageIndex? StructIndex(string? structPath)
+    {
+        if (string.IsNullOrWhiteSpace(structPath))
+        {
+            return null;
+        }
+
+        var dot = structPath.LastIndexOf('.');
+        if (dot <= 0)
+        {
+            return FindStructImport(structPath);
+        }
+
+        var (packagePath, objectName) = (structPath[..dot], structPath[(dot + 1)..]);
+        var importClass = packagePath.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase)
+            ? "ScriptStruct"
+            : "UserDefinedStruct";
+
+        var package = ImportIndex.EnsurePackage(_asset, packagePath);
+        return ImportIndex.EnsureImportedObject(_asset, objectName, package, importClass);
     }
 
     /// <summary>填公共字段。实测：局部临时变量一律 RF_Public + CPF_None + ArrayDim=TArray。</summary>
