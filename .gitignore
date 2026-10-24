@@ -6,3 +6,5 @@ obj/
 
 .sample-work/
 *.sample-work-re/
+
+.git-commit-msg.txt

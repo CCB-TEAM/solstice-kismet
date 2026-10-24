@@ -1,7 +1,0 @@
-docs: 可运行的用法示例 samples/Usage（含真实输出）
-
-一个不需要改代码就能跑的控制台示例，对着真实资产演示 5 个场景：
-列函数 → 反编译 → ubergraph 重烘 → PlanCall 看引脚 → 插入调用并写回 → 重新打开验证。
-
-README 收录了 BP_Chat 的实际输出；HANDOVER 目录索引补上 samples/Usage。
-工作目录用 .sample-work/（%TEMP% 在部分环境不可写），已加 .gitignore。
