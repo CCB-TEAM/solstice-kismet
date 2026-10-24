@@ -94,6 +94,12 @@ public sealed record DoubleArg(double Value) : KArg(PinType.Float);
 /// <summary>单精度字面量，对应 EX_FloatConst。</summary>
 public sealed record FloatArg(float Value) : KArg(PinType.Float);
 
+/// <summary>字节字面量，对应 EX_ByteConst。</summary>
+public sealed record ByteArg(byte Value) : KArg(PinType.Int);
+
+/// <summary>文本字面量，对应 EX_TextConst。</summary>
+public sealed record TextArg(FScriptText Value) : KArg(PinType.String);
+
 /// <summary>结构体字面量，对应 EX_StructConst。</summary>
 public sealed record StructConstArg(FPackageIndex Struct, int Size, IReadOnlyList<KArg> Values)
     : KArg(PinType.Struct);

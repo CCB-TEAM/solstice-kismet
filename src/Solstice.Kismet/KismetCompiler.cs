@@ -197,6 +197,12 @@ public static class KismetCompiler
                 case FloatArg f2:
                     return new EX_FloatConst { Value = f2.Value };
 
+                case ByteArg b:
+                    return new EX_ByteConst { Value = b.Value };
+
+                case TextArg t:
+                    return new EX_TextConst { Value = t.Value };
+
                 case StructConstArg st:
                     return new EX_StructConst
                     {
