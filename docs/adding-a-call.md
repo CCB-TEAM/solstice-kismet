@@ -143,6 +143,29 @@ EX_InstanceVariable path=[chatWindow]             resolvedOwner=1    ← 1  = �
 否则「反编译 → 编译」的往返保证就废了（编译器偷偷插一条赋值，字节码就比节点多一条）。
 所以临时变量必须在**节点层面**显式存在——由 API 在构造节点时创建。
 
+### 临时变量的类型 = 被调函数的返回参数
+
+不需要读资产的局部变量表，jmap 的 `params` 里 `dir = "return"` 那条就是它：
+
+| 函数 | 返回参数 | 类型 |
+|---|---|---|
+| `Greater_IntInt` | `ReturnValue` | `BoolProperty`（size 1） |
+| `Concat_StrStr` | `ReturnValue` | `StrProperty`（size 16） |
+| `MakeVector` | `ReturnValue` | `StructProperty`（size 24，**结构名是 null**） |
+
+API：
+
+```csharp
+var inserted = ws.InsertCallWithResult(target, callee);
+inserted.Variable;    // CallFunc_Greater_IntInt_ReturnValue
+inserted.ReturnType;  // FunctionParam { Type=BoolProperty, Size=1, ... }
+
+ws.ResultTypeOf(callee);   // 单独查
+```
+
+**唯一不完整的地方**：`StructProperty` 的具体结构名在 jmap 里是 `null`，
+只知道"是结构体 + 字节大小"。要拿到具体结构得靠 usmap（原生结构）或读结构资产（`S_*`）。
+
 ## 八、编译：节点 → 字节
 
 ```

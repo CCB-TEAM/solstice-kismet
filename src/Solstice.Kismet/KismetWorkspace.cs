@@ -672,7 +672,7 @@ public sealed class KismetWorkspace
     /// 由这里在构造节点时创建，而不是编译期偷偷插入。
     /// </para>
     /// </summary>
-    public (string Variable, IReadOnlyList<string> Opcodes, string Hex, int Bytes) InsertCallWithResult(
+    public InsertedCall InsertCallWithResult(
         string functionName,
         FunctionRef callee,
         params KArg[] args)
@@ -688,8 +688,26 @@ public sealed class KismetWorkspace
         }
 
         var result = AssignCallResult(functionName, callee, name, args);
-        return (name, result.Opcodes, result.Hex, result.Bytes);
+        return new InsertedCall(name, ResultTypeOf(callee), result.Opcodes, result.Hex, result.Bytes);
     }
+
+    /// <summary>插入调用后得到的临时变量：名字 + **它的类型**（= 被调函数的返回参数）+ 编译结果。</summary>
+    public sealed record InsertedCall(
+        string Variable,
+        FunctionParam? ReturnType,
+        IReadOnlyList<string> Opcodes,
+        string Hex,
+        int Bytes);
+
+    /// <summary>
+    /// 调用的返回类型。临时变量的类型就是它，不需要读资产的局部变量表。
+    ///
+    /// <para>
+    /// 只给到 Property kind 与字节大小；<c>StructProperty</c> 的具体结构名在 jmap 里通常是 null。
+    /// </para>
+    /// </summary>
+    public FunctionParam? ResultTypeOf(FunctionRef function)
+        => (function.Signature ?? Catalog?.Find(function.OwnerPath, function.Name))?.ReturnParam;
 
     /// <summary>
     /// 调用一次并把返回值存进局部变量（等价于 UE 的

@@ -103,7 +103,7 @@ if (catalogPath is not null && File.Exists(catalogPath))
     // 自动命名：CallFunc_<函数>_ReturnValue，重名自动加 _2/_3
     var auto1 = ws.InsertCallWithResult(target, ws.ResolveFunction("Greater_IntInt")!);
     var auto2 = ws.InsertCallWithResult(target, ws.ResolveFunction("Greater_IntInt")!);
-    Console.WriteLine($"[6] 自动命名临时变量: {auto1.Variable} / {auto2.Variable}");
+    Console.WriteLine($"[6] 自动命名临时变量: {auto1.Variable} ({auto1.ReturnType?.Type} size={auto1.ReturnType?.Size}) / {auto2.Variable}");
 
     var tempName = "CallFunc_Greater_IntInt_ReturnValue";
     var withTemp = ws.AssignCallResult(target, ws.ResolveFunction("Greater_IntInt")!, tempName);

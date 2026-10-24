@@ -3,7 +3,14 @@ using System.Text.Json;
 namespace Solstice.Kismet;
 
 /// <summary>函数的一个参数（来自 jmap 的函数表）。</summary>
-public sealed record FunctionParam(string Name, string Type, string Dir, string Class, string Enum);
+public sealed record FunctionParam(
+    string Name,
+    string Type,
+    string Dir,
+    string Class,
+    string Enum,
+    int Offset = 0,
+    int Size = 0);
 
 /// <summary>函数签名。</summary>
 public sealed record FunctionSignature(
@@ -24,7 +31,19 @@ public sealed record FunctionSignature(
     public IReadOnlyList<FunctionParam> Outputs
         => Params.Where(p => p.Dir is "return" or "out").ToArray();
 
-    public bool HasReturn => Params.Any(p => p.Dir == "return");
+    /// <summary>
+    /// 返回值参数（<c>dir = "return"</c>）。
+    ///
+    /// <para>
+    /// 调用产生的临时变量（<c>CallFunc_XXX_ReturnValue</c>）的类型就是它——
+    /// 不需要去读资产的局部变量表。注意 <c>StructProperty</c> 的 <c>Class</c> 在 jmap 里
+    /// 常为 null（只知道是结构体与字节大小，不知道是哪个结构）。
+    /// </para>
+    /// </summary>
+    public FunctionParam? ReturnParam
+        => Params.FirstOrDefault(p => string.Equals(p.Dir, "return", StringComparison.Ordinal));
+
+    public bool HasReturn => ReturnParam is not null;
 }
 
 /// <summary>
@@ -82,7 +101,9 @@ public sealed class FunctionCatalog
                             Str(p, "type"),
                             Str(p, "dir"),
                             Str(p, "class"),
-                            Str(p, "enum")));
+                            Str(p, "enum"),
+                            Int(p, "offset"),
+                            Int(p, "size")));
                     }
                 }
 
@@ -97,6 +118,9 @@ public sealed class FunctionCatalog
 
     private static string Str(JsonElement e, string prop)
         => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    private static int Int(JsonElement e, string prop)
+        => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
 
     /// <summary>优先按完整路径找，找不到再退回短名（同名函数可能有多份，取第一个）。</summary>
     public FunctionSignature? Find(string? ownerPath, string name)
