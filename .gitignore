@@ -8,3 +8,6 @@ obj/
 *.sample-work-re/
 
 .git-commit-msg.txt
+
+.msg.tmp
+.msg.tmp.txt
