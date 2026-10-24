@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Solstice.Kismet/Solstice.Kismet.csproj" />
+  </Folder>
+</Solution>
