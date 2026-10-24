@@ -100,6 +100,11 @@ if (catalogPath is not null && File.Exists(catalogPath))
     Console.WriteLine($"      重新打开后该函数 {again.Count} 个节点（读回成功）");
 
     // ---- 场景 6：调用 + 结果存进临时变量（等价 UE 的 CallFunc_XXX_ReturnValue）----
+    // 自动命名：CallFunc_<函数>_ReturnValue，重名自动加 _2/_3
+    var auto1 = ws.InsertCallWithResult(target, ws.ResolveFunction("Greater_IntInt")!);
+    var auto2 = ws.InsertCallWithResult(target, ws.ResolveFunction("Greater_IntInt")!);
+    Console.WriteLine($"[6] 自动命名临时变量: {auto1.Variable} / {auto2.Variable}");
+
     var tempName = "CallFunc_Greater_IntInt_ReturnValue";
     var withTemp = ws.AssignCallResult(target, ws.ResolveFunction("Greater_IntInt")!, tempName);
     var saved2 = ws.Save(workDir, "edited2.uasset");

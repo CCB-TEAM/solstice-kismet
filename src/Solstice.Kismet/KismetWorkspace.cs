@@ -659,6 +659,39 @@ public sealed class KismetWorkspace
     }
 
     /// <summary>
+    /// 插入调用，并把结果存进**自动命名**的临时变量。
+    ///
+    /// <para>
+    /// 名字按 UE 约定派生：<c>CallFunc_&lt;函数名&gt;_ReturnValue</c>，重名加 <c>_2</c>、<c>_3</c>…
+    /// 返回变量名，调用方用它继续引用结果。
+    /// </para>
+    ///
+    /// <para>
+    /// <b>为什么不在编译器里自动生成</b>：编译器的输入是节点、输出是字节码，两者必须一一对应
+    /// （否则「反编译 → 编译」的往返保证就废了）。临时变量必须在**节点层面**显式存在——
+    /// 由这里在构造节点时创建，而不是编译期偷偷插入。
+    /// </para>
+    /// </summary>
+    public (string Variable, IReadOnlyList<string> Opcodes, string Hex, int Bytes) InsertCallWithResult(
+        string functionName,
+        FunctionRef callee,
+        params KArg[] args)
+    {
+        var existing = new HashSet<string>(Variables(functionName), StringComparer.Ordinal);
+        var baseName = $"CallFunc_{callee.Name}_ReturnValue";
+        var name = baseName;
+        var suffix = 2;
+
+        while (existing.Contains(name))
+        {
+            name = $"{baseName}_{suffix++}";
+        }
+
+        var result = AssignCallResult(functionName, callee, name, args);
+        return (name, result.Opcodes, result.Hex, result.Bytes);
+    }
+
+    /// <summary>
     /// 调用一次并把返回值存进局部变量（等价于 UE 的
     /// <c>Set CallFunc_XXX_ReturnValue = XXX(...)</c>）。
     /// </summary>
