@@ -261,6 +261,29 @@ KismetCoverage.dll <资产目录> <usmap> --insert <函数名> --catalog <functi
 ⚠️ 新建调用里 `ContextKind` 固定为 `Normal`、`InnerShape` 固定为 `Final`，
 空 `RValuePointer` 只验证过**字节可读回**，没有在 UE 运行时验证过。
 
+### 参数自动填充（jmap 的第二种用法）
+
+`CreateCall(name)` 不给参数时按签名自动生成（`DefaultArgs`）。jmap 里的类型是
+**Property kind**（17 种），映射如下：
+
+| jmap 类型 | 生成 | 忠实? |
+|---|---|---|
+| `BoolProperty` | `BoolArg(false)` | ✅ |
+| `IntProperty` / `ByteProperty` / `EnumProperty` | `IntArg(0)` / `ByteArg(0)` | ✅ |
+| `FloatProperty` / `DoubleProperty` | `FloatArg(0)` / `DoubleArg(0)` | ✅ |
+| `StrProperty` / `NameProperty` | `StringArg("")` / `NameArg(FName)` | ✅ |
+| `ObjectProperty` / `ClassProperty` / `DelegateProperty` / `SoftObjectProperty` | `NoObjectArg()`（空引用） | ✅ |
+| `TextProperty` / `StructProperty` / `ArrayProperty` / `MapProperty` / `SetProperty` | `NoObjectArg()` | ❌ **占位** |
+
+占位的会带 `IsPlaceholder = true`，调用方必须替换——它们是字节合法但语义不全的。
+
+实测：`Greater_IntInt`（2 个 int 参）、`Concat_StrStr`（2 个 str 参）各 **24/24**，
+且写回重读后**参数个数与签名一致**（`--insert` 会校验这一点）。
+
+> 两个 jmap 文件不要混：`functions.json`（4.9MB，13,064 函数）含**引擎类**；
+> `functions.kards.json`（474KB，1,416 函数）只有**游戏侧类**。
+> 插引擎函数（`PrintString`、`Greater_IntInt`）必须用前者。
+
 用它测出的真实口径（2026-10）：
 
 | 目录 | 资产 | 函数 | 结果 |

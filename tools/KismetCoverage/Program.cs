@@ -343,7 +343,8 @@ static int RunInsert(string[] files, string usmapPath, string callee, string? ca
             total++;
 
             var nodes = ws.Decompile(target).ToList();
-            var call = ws.CreateCall(callee, []);
+            var call = ws.CreateCall(callee); // 参数按签名自动生成
+            var expectedArgs = catalog.Find(null, callee)?.Inputs.Count ?? -1;
             if (nodes.Count > 0 && nodes[^1] is ReturnNode)
             {
                 nodes.Insert(nodes.Count - 1, call);
@@ -356,18 +357,22 @@ static int RunInsert(string[] files, string usmapPath, string callee, string? ca
             ws.Generate(nodes, target);
             var saved = ws.Save(workDir, "inserted.uasset");
 
-            // 重新打开存盘结果，确认新调用能反编译回来
+            // 重新打开存盘结果，确认新调用能反编译回来（参数个数也要对上）
             var reopened = KismetWorkspace.Open(saved.UAsset, saved.UExp, usmapBytes, workDir + "-re");
             var again = reopened.Decompile(target);
 
-            var found = ContainsCall(again, callee);
-            if (found)
+            var found = FindCall(again, callee);
+            if (found is null)
             {
-                ok++;
+                failures.Add($"{name} :: {target} :: 写回后找不到 {callee}");
+            }
+            else if (expectedArgs >= 0 && found.Value != expectedArgs)
+            {
+                failures.Add($"{name} :: {target} :: 参数个数 {found.Value} != 签名 {expectedArgs}");
             }
             else
             {
-                failures.Add($"{name} :: {target} :: 写回后找不到 {callee}");
+                ok++;
             }
         }
         catch (Exception ex)
@@ -394,34 +399,57 @@ static int RunInsert(string[] files, string usmapPath, string callee, string? ca
     return failures.Count == 0 ? 0 : 1;
 }
 
-static bool ContainsCall(IEnumerable<KNode> nodes, string callee)
+static int? FindCall(IEnumerable<KNode> nodes, string callee)
 {
     foreach (var node in nodes)
     {
         switch (node)
         {
             case CallNode c when c.Function == callee:
+                return c.Args.Count;
+
             case VirtualCallNode v when v.Function == callee:
+                return v.Args.Count;
+
             case ContextCallNode cc when cc.Function == callee:
+                return cc.Args.Count;
+
             case MathCallNode m when m.Function == callee:
+                return m.Args.Count;
+
             case LocalFinalCallNode lf when lf.Function == callee:
-                return true;
+                return lf.Args.Count;
 
-            case IfNode f when ContainsCall(f.Then, callee) || (f.Else is { } e && ContainsCall(e, callee)):
-                return true;
+            case IfNode f:
+                foreach (var r in new[] { FindCall(f.Then, callee), f.Else is { } e ? FindCall(e, callee) : null })
+                {
+                    if (r is not null) { return r; }
+                }
 
-            case LoopNode loop when ContainsCall(loop.Body, callee):
-                return true;
+                break;
 
-            case BlockGraphNode graph when graph.Blocks.Any(b => ContainsCall(b.Nodes, callee)):
-                return true;
+            case LoopNode loop when FindCall(loop.Body, callee) is { } body:
+                return body;
 
-            case UberGraphNode uber when uber.Sections.Any(s => ContainsCall(s.Nodes, callee)):
-                return true;
+            case BlockGraphNode graph:
+                foreach (var b in graph.Blocks)
+                {
+                    if (FindCall(b.Nodes, callee) is { } r) { return r; }
+                }
+
+                break;
+
+            case UberGraphNode uber:
+                foreach (var s in uber.Sections)
+                {
+                    if (FindCall(s.Nodes, callee) is { } r) { return r; }
+                }
+
+                break;
         }
     }
 
-    return false;
+    return null;
 }
 
 static void Bump(Dictionary<string, int> map, string key)

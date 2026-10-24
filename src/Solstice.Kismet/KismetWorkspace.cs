@@ -129,17 +129,20 @@ public sealed class KismetWorkspace
     /// 没有签名表时**直接报错**，不猜形态——形态猜错会让字节看起来对、运行时行为错。
     /// </para>
     /// </summary>
+    /// <param name="args">参数；给 <c>null</c> 时按签名自动生成（见 <see cref="DefaultArgs"/>）。</param>
     /// <param name="self">非静态函数的调用对象；不给则用 <c>this</c>。</param>
-    public KNode CreateCall(string functionName, IReadOnlyList<KArg> args, KArg? self = null)
+    public KNode CreateCall(string functionName, IReadOnlyList<KArg>? args = null, KArg? self = null)
     {
         if (Functions.Contains(functionName, StringComparer.Ordinal))
         {
-            return new VirtualCallNode(functionName, args);
+            return new VirtualCallNode(functionName, args ?? []);
         }
 
         var signature = Catalog?.Find(null, functionName)
                         ?? throw new InvalidOperationException(
                             $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）——不猜调用形态");
+
+        args ??= DefaultArgs(functionName).Select(a => a.Value).ToArray();
 
         var index = ImportIndex.EnsureFunction(_asset, functionName, signature.OwnerPath);
 
@@ -158,7 +161,45 @@ public sealed class KismetWorkspace
             StackNode: index);
     }
 
-    /// <summary>把一个函数反编译成节点。
+    /// <summary>自动生成的参数：值本身 + 它是不是「占位」（无法忠实合成的类型）。</summary>
+    public sealed record DefaultArg(string Name, string Type, KArg Value, bool IsPlaceholder);
+
+    /// <summary>
+    /// 按 jmap 签名给一次调用生成占位参数（编辑器插入节点时用）。
+    ///
+    /// <para>
+    /// 17 种 Property 类型：**能忠实合成**的走真实常量（bool/int/byte/float/double/string/
+    /// name/object/class/delegate）；**需要真实载荷**的（text/struct/array/map/set）用
+    /// <see cref="NoObjectArg"/> 占位并标记 <c>IsPlaceholder</c>，调用方必须替换。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<DefaultArg> DefaultArgs(string functionName)
+    {
+        var signature = Catalog?.Find(null, functionName)
+                        ?? throw new InvalidOperationException(
+                            $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）");
+
+        return signature.Inputs.Select(MakeDefault).ToArray();
+    }
+
+    private DefaultArg MakeDefault(FunctionParam param) => param.Type switch
+    {
+        "BoolProperty" => new DefaultArg(param.Name, param.Type, new BoolArg(false), false),
+        "IntProperty" => new DefaultArg(param.Name, param.Type, new IntArg(0), false),
+        "ByteProperty" or "EnumProperty" => new DefaultArg(param.Name, param.Type, new ByteArg(0), false),
+        "FloatProperty" => new DefaultArg(param.Name, param.Type, new FloatArg(0f), false),
+        "DoubleProperty" => new DefaultArg(param.Name, param.Type, new DoubleArg(0d), false),
+        "StrProperty" => new DefaultArg(param.Name, param.Type, new StringArg(""), false),
+        "NameProperty" => new DefaultArg(param.Name, param.Type, new NameArg(new FName(_asset, "")), false),
+        "ObjectProperty" or "ClassProperty" or "DelegateProperty" or "SoftObjectProperty"
+            => new DefaultArg(param.Name, param.Type, new NoObjectArg(), false),
+
+        // text / struct / array / map / set：需要真实载荷，只能占位
+        _ => new DefaultArg(param.Name, param.Type, new NoObjectArg(), true)
+    };
+
+    /// <summary>
+    /// 把一个函数反编译成节点。
     ///
     /// <para>
     /// 结果一定是三种可读表示之一：树形结构化 / ubergraph 展开 / 基本块图；
