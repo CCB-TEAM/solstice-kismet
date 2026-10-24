@@ -28,6 +28,23 @@ stdio + JSON-RPC 2.0（`protocolVersion = 2024-11-05`）。MCP 客户端配置�
 dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --selftest [--usmap <path>]
 ```
 
+### 更新正在被客户端使用的服务端
+
+运行中的服务端会把 `bin/Release/net10.0/` 里的 dll 映射住，直接 `dotnet build -c Release` 会失败
+（`MSB3021` / `MSB3027`：file is being used by another process）。Windows 允许**重命名**已加载的
+dll，所以不必停客户端：
+
+```powershell
+$bin = 'src/Solstice.Kismet.Mcp/bin/Release/net10.0'
+dotnet build src/Solstice.Kismet.Mcp -c Release -o src/Solstice.Kismet.Mcp/bin/push/net10.0   # 先出到旁路目录
+Move-Item "$bin/Solstice.Kismet.Mcp.dll" "$bin/Solstice.Kismet.Mcp.dll.old" -Force            # 已加载也能改名
+Move-Item "$bin/Solstice.Kismet.dll"     "$bin/Solstice.Kismet.dll.old"     -Force
+Copy-Item src/Solstice.Kismet.Mcp/bin/push/net10.0/* $bin -Force                              # 覆盖成新构建
+```
+
+新构建对**下一次**客户端启动生效；当前会话里跑的还是旧镜像（内存里的那份不会变）。
+`*.old` 在客户端退出后才能删。
+
 ## 工具
 
 | 工具 | 参数 | 作用 |
