@@ -678,9 +678,12 @@ public sealed class KismetWorkspace
         params KArg[] args)
     {
         var existing = new HashSet<string>(Variables(functionName), StringComparer.Ordinal);
-        var baseName = $"CallFunc_{callee.Name}_ReturnValue";
+
+        // UE 的命名：CallFunc_<函数>_<返回引脚名>；重复时从 _1 开始（实测 ..._ReturnValue、_1、_2、_3）
+        var pinName = ResultTypeOf(callee)?.Name;
+        var baseName = $"CallFunc_{callee.Name}_{(string.IsNullOrEmpty(pinName) ? "ReturnValue" : pinName)}";
         var name = baseName;
-        var suffix = 2;
+        var suffix = 1;
 
         while (existing.Contains(name))
         {

@@ -81,6 +81,17 @@ var (ops2, hex2, _)    = ws.Generate(nodes, "ExecuteUbergraph_card_brawl_test1")
 var saved = ws.Save("/tmp/ws");   // 返回 uasset + uexp 两半，缺一不可
 ```
 
+## MCP 服务端
+
+`src/Solstice.Kismet.Mcp` 把本库暴露成 MCP 工具（stdio + JSON-RPC 2.0），
+agent 可以直接调 `kismet_decompile` / `kismet_insert_call` / `kismet_bake_ubergraph` 等 8 个工具。
+详见 **[docs/mcp.md](docs/mcp.md)**。
+
+```powershell
+dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll            # 起服务
+dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --selftest # 自检
+```
+
 ## 跑一个真实示例
 
 `samples/Usage` 是可直接运行的用法示例（对着真实资产跑，不需要改代码）：

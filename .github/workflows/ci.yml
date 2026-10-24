@@ -24,3 +24,9 @@ jobs:
 
       - name: Verify
         run: dotnet run --project tests/Solstice.Kismet.Verify -c Release
+
+      - name: Build MCP server
+        run: dotnet build src/Solstice.Kismet.Mcp/Solstice.Kismet.Mcp.csproj -c Release
+
+      - name: MCP self-test
+        run: dotnet src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll --selftest
