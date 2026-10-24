@@ -177,9 +177,7 @@ public static class KismetCompiler
                 case CallArg c:
                 {
                     var inner = c.Args.Select(ToExpr).ToArray();
-                    var stack = functions is not null && functions.TryGetValue(c.Function, out var fi)
-                        ? fi
-                        : new FPackageIndex(0);
+                    var stack = StackOf(c.Function, c.StackNode);
 
                     switch (c.Shape)
                     {
@@ -199,14 +197,28 @@ public static class KismetCompiler
 
                     var final = new EX_FinalFunction { StackNode = stack, Parameters = inner };
 
-                    if (c.Shape == CallShape.Context
-                        && c.ObjectVariable is { } objVar
-                        && variables is not null
-                        && variables.TryGetValue(objVar, out var objPtr))
+                    if (c.Shape == CallShape.Context)
                     {
+                        // 对象可以是变量（有指针），也可以是别的表达式（取成员 / 调用返回值）
+                        var objPtr = c.ObjectArg is PointerArg pa
+                            ? pa.Pointer
+                            : c.ObjectVariable is { } objVar
+                              && variables is not null
+                              && variables.TryGetValue(objVar, out var found)
+                                ? found
+                                : null;
+
+                        if (objPtr is null)
+                        {
+                            // 没有属性指针就构造不出合法的 EX_Context
+                            return final;
+                        }
+
                         return new EX_Context
                         {
-                            ObjectExpression = new EX_LocalVariable { Variable = objPtr },
+                            ObjectExpression = c.ObjectArg is { } oa
+                                ? ToExpr(oa)
+                                : new EX_LocalVariable { Variable = objPtr },
                             ContextExpression = final,
                             RValuePointer = objPtr,
                             Offset = measure?.Invoke(final) ?? 0
@@ -253,14 +265,26 @@ public static class KismetCompiler
                     break;
                 }
 
-                case ContextCallNode cc
-                    when variables is not null && variables.TryGetValue(cc.ObjectVariable, out var objPtr)
-                         && functions is not null && functions.TryGetValue(cc.Function, out var ctxFn):
+                case ContextCallNode cc:
                 {
-                    var inner = new EX_FinalFunction { StackNode = ctxFn, Parameters = BuildArgs(new CallNode(cc.Function, cc.Args)) };
+                    var objPtr = cc.ObjectArg is PointerArg pa
+                        ? pa.Pointer
+                        : variables is not null && variables.TryGetValue(cc.ObjectVariable, out var found) ? found : null;
+
+                    if (objPtr is null)
+                    {
+                        throw new InvalidOperationException($"跨对象调用 {cc.Function} 的对象「{cc.ObjectVariable}」没有属性指针");
+                    }
+
+                    var inner = new EX_FinalFunction
+                    {
+                        StackNode = StackOf(cc.Function, null),
+                        Parameters = BuildArgs(new CallNode(cc.Function, cc.Args))
+                    };
+
                     result.Add(new EX_Context
                     {
-                        // 对象可以是变量，也可以是另一个调用的返回值
+                        // 对象可以是变量，也可以是另一个调用/取成员的结果
                         ObjectExpression = cc.ObjectArg is { } oa
                             ? ToExpr(oa)
                             : new EX_LocalVariable { Variable = objPtr },

@@ -146,7 +146,11 @@ public static class KismetDecompiler
                 case EX_Context ctx when ctx.ContextExpression is EX_FinalFunction inner:
                 {
                     var name = options.ResolveImport?.Invoke(inner.StackNode) ?? $"<import {inner.StackNode?.Index}>";
-                    nodes.Add(new ContextCallNode(TargetName(ctx.ObjectExpression), name, ToArgs(inner.Parameters, options)));
+                    nodes.Add(new ContextCallNode(
+                        TargetName(ctx.ObjectExpression),
+                        name,
+                        ToArgs(inner.Parameters, options),
+                        ObjectArg: ToArg(ctx.ObjectExpression, options)));
                     i++;
                     continue;
                 }
@@ -289,15 +293,18 @@ public static class KismetDecompiler
         EX_LocalFinalFunction lf => new CallArg(
             options.ResolveImport?.Invoke(lf.StackNode) ?? $"<import {lf.StackNode?.Index}>",
             ToArgs(lf.Parameters, options),
-            CallShape.LocalFinal),
+            CallShape.LocalFinal,
+            StackNode: lf.StackNode),
         EX_CallMath cm => new CallArg(
             options.ResolveImport?.Invoke(cm.StackNode) ?? $"<import {cm.StackNode?.Index}>",
             ToArgs(cm.Parameters, options),
-            CallShape.Math),
+            CallShape.Math,
+            StackNode: cm.StackNode),
         EX_FinalFunction f => new CallArg(
             options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>",
             ToArgs(f.Parameters, options),
-            CallShape.Final),
+            CallShape.Final,
+            StackNode: f.StackNode),
         EX_LocalVirtualFunction v => new CallArg(
             v.VirtualFunctionName?.ToString() ?? "<?>",
             ToArgs(v.Parameters, options),
@@ -306,7 +313,9 @@ public static class KismetDecompiler
             options.ResolveImport?.Invoke(inner.StackNode) ?? $"<import {inner.StackNode?.Index}>",
             ToArgs(inner.Parameters, options),
             CallShape.Context,
-            TargetName(ctx.ObjectExpression)),
+            TargetName(ctx.ObjectExpression),
+            inner.StackNode,
+            ToArg(ctx.ObjectExpression, options)),
         _ => null
     };
 
