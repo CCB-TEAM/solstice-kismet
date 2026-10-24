@@ -32,9 +32,12 @@ ws.AttachCatalog(FunctionCatalog.Load(functionsJson));
 //     且已用字节比对校验过（校验不过会逐级退让，最终仍与原字节一致）
 var nodes0 = ws.Decompile("ExecuteUbergraph_BP_Chat");
 
-// ubergraph 还能重新烘焙，并拿回需要写回 UClass 事件引用的入口偏移表
+// ubergraph 还能重新烘焙：返回段起始偏移 + 尾声偏移，以及**调用点入口表**
 var baked = ws.BakeUbergraph("ExecuteUbergraph_BP_Chat");
 // baked.EntryOffsets / baked.EpilogueOffset
+// 真正的入口偏移烘在调用点里（LocalFinal ExecuteUbergraph_X(<IntConst>)），
+// 用 ws.UbergraphCallSites(name) 扫出来、ws.CheckUbergraphEntryPoints(name) 校验；
+// 编辑后入口点错位会自动回滚，Save 前再拦一次
 
 // 2.6 新增一次调用（SDK 常用）：
 //     推荐先解析成「引用」——它自带归属类与包索引，之后不再按名字查表（无歧义）
@@ -53,16 +56,33 @@ var m = ws.ResolveFunction("Greater_IntInt", "KismetMathLibrary");
 //   → /Script/Engine.KismetMathLibrary.Greater_IntInt
 
 // 调用 + 结果存进临时变量（等价 UE 的 Set CallFunc_XXX_ReturnValue = XXX(...)）：
-// 局部变量指针形如 FFieldPath{ [名字], ResolvedOwner = 该函数导出 }
-ws.AssignCallResult("SomeFunction", m!, "CallFunc_Greater_IntInt_ReturnValue");
+// 局部变量指针形如 FFieldPath{ [名字], ResolvedOwner = 该函数导出 }，
+// 并且会把这条变量**声明进函数的属性表**（按 jmap 的类型递归构造 FProperty）
+var inserted = ws.InsertCallWithResult("SomeFunction", m!);
+// inserted.Variable = CallFunc_Greater_IntInt_ReturnValue
+// inserted.Declaration = null（成功）或不能声明的原因
 
 // 2.7 读-改-写一条龙：反编译（已字节校验）→ 改 → 编译写回
-ws.InsertCall("SomeFunction", ws.ResolveFunction("KardsClearLaunchNotification")!);  // 传引用
-ws.Edit("SomeFunction", nodes => nodes.SkipLast(1));             // 任意变换
+ws.InsertCall("SomeFunction", ws.ResolveFunction("KardsClearLaunchNotification")!);  // 末尾追加
+ws.InsertCallBefore("SomeFunction", callee!, "1.2");   // 插到节点 #1.2 之前
+ws.ReplaceCall("SomeFunction", "1.2", otherCallee!);   // 换掉那个调用，保留原形态与上下文
+ws.DeleteNode("SomeFunction", "1.0");                  // 删节点（Return 不允许删）
+ws.Edit("SomeFunction", nodes => nodes.SkipLast(1));   // 任意变换
+
+// 参数赋值：不给就用签名占位；给了就按类型校验（类型不匹配直接报错，不凑合编码）
+var args = new[]
+{
+    new KismetWorkspace.ArgSpec("InString", new KismetWorkspace.ArgValue(KismetWorkspace.ArgKind.String, Text: "hi")),
+    new KismetWorkspace.ArgSpec(null, new KismetWorkspace.ArgValue(KismetWorkspace.ArgKind.Variable, Text: "bCanChange"))
+};
+var callArgs = ws.BuildArgs("SomeFunction", callee!, args);
 
 // 想先看引脚、哪些参数只是占位（编辑器 UI 用）
 var plan = ws.PlanCall("PrintString");
 foreach (var pin in plan.Pins) { /* pin.IsPlaceholder 标出无法忠实合成的参数 */ }
+
+// 逐函数校验：能否结构化还原（= 回编译后逐字节一致）
+foreach (var e in ws.VerifyAll()) { /* e.Function / e.Structured / e.Error */ }
 
 // 3. 描述逻辑
 var nodes = new List<KNode>
