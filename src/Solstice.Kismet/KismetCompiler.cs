@@ -216,6 +216,23 @@ public static class KismetCompiler
                         Target = ToExpr(dc.Target)
                     };
 
+                case InterfaceCastArg ic:
+                    return new EX_ObjToInterfaceCast
+                    {
+                        ClassPtr = ic.ClassPtr,
+                        Target = ToExpr(ic.Target)
+                    };
+
+                case LongArg la:
+                    return new EX_Int64Const { Value = la.Value };
+
+                case PrimitiveCastArg pc:
+                    return new EX_PrimitiveCast
+                    {
+                        ConversionType = pc.Conversion,
+                        Target = ToExpr(pc.Target)
+                    };
+
                 case ArrayConstArg ac:
                     return new EX_ArrayConst
                     {

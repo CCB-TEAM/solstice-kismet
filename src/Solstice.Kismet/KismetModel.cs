@@ -106,6 +106,15 @@ public sealed record RotationArg(FRotator Value) : KArg(PinType.Struct);
 /// <summary>动态类型转换，对应 EX_DynamicCast（EX_CastBase：Target + ClassPtr）。</summary>
 public sealed record DynamicCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(PinType.Object);
 
+/// <summary>转成接口，对应 EX_ObjToInterfaceCast（EX_CastBase）。</summary>
+public sealed record InterfaceCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(PinType.Object);
+
+/// <summary>64 位整数字面量，对应 EX_Int64Const。</summary>
+public sealed record LongArg(long Value) : KArg(PinType.Int);
+
+/// <summary>基本类型转换，对应 EX_PrimitiveCast（ConversionType + Target）。</summary>
+public sealed record PrimitiveCastArg(KArg Target, ECastToken Conversion) : KArg(PinType.Int);
+
 /// <summary>数组字面量，对应 EX_ArrayConst。</summary>
 public sealed record ArrayConstArg(KismetPropertyPointer Inner, IReadOnlyList<KArg> Elements)
     : KArg(PinType.Struct);

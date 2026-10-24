@@ -431,6 +431,13 @@ public static class KismetDecompiler
         EX_DynamicCast dc => new DynamicCastArg(
             ToArg(dc.Target, options) ?? new NoObjectArg(),
             dc.ClassPtr),
+        EX_ObjToInterfaceCast ic => new InterfaceCastArg(
+            ToArg(ic.Target, options) ?? new NoObjectArg(),
+            ic.ClassPtr),
+        EX_Int64Const la => new LongArg(la.Value),
+        EX_PrimitiveCast pc => new PrimitiveCastArg(
+            ToArg(pc.Target, options) ?? new IntArg(0),
+            pc.ConversionType),
         EX_ArrayConst ac => new ArrayConstArg(ac.InnerProperty!, ToArgs(ac.Elements, options)),
         EX_TextConst t => new TextArg(t.Value),
         EX_StructConst st => new StructConstArg(st.Struct, st.StructSize, ToArgs(st.Value, options)),
