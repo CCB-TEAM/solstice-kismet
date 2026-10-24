@@ -25,6 +25,7 @@ var assetDir = args[0];
 var usmapPath = args[1];
 var maxAssets = args.Length > 2 && args[2] == "--max" ? int.Parse(args[3]) : int.MaxValue;
 var verbose = args.Contains("--verbose");
+var showDegraded = args.Contains("--degraded");
 
 if (!Directory.Exists(assetDir))
 {
@@ -45,6 +46,7 @@ var passed = 0;
 var degraded = 0;
 var assetFailures = 0;
 var failures = new List<(string Asset, string Function, string Reason)>();
+var degradedList = new List<(string Asset, string Function, string Warn)>();
 var reasons = new Dictionary<string, int>(StringComparer.Ordinal);
 
 foreach (var file in files)
@@ -75,32 +77,45 @@ foreach (var file in files)
         {
             total++;
             var bytecode = fn.ScriptBytecode!;
+            string? firstWarn = null;
             var options = new DecompileOptions(
                 Measure: e => e.GetSize(asset),
                 ResolveImport: idx => names.TryGetValue(idx?.Index ?? 0, out var n) ? n : null,
-                Warn: null);
+                Warn: m => firstWarn ??= m);
 
             var originalBytes = Serialize(bytecode, asset);
 
             try
             {
-                var structured = KismetDecompiler.Decompile(bytecode, options);
-                var rebuiltStructured = KismetCompiler.CompileToExpressions(
-                    structured, null, null, e => e.GetSize(asset), n => new FName(asset, n));
-                var structuredBytes = Serialize(rebuiltStructured, asset);
-                var structuredSame = originalBytes.AsSpan().SequenceEqual(structuredBytes);
+                // 与 DecompileVerified 一致：先试花式，再试保守，最后才退扁平
+                byte[]? Recompile(IReadOnlyList<KNode> ns) => Serialize(
+                    KismetCompiler.CompileToExpressions(ns, null, null, e => e.GetSize(asset), n => new FName(asset, n)),
+                    asset);
+
+                var attempts = new[] { options, options with { FoldBottomLoops = false } };
+                var structuredSame = false;
+                IReadOnlyList<KNode>? finalNodes = null;
+
+                foreach (var attempt in attempts)
+                {
+                    var candidate = KismetDecompiler.Decompile(bytecode, attempt);
+                    if (originalBytes.AsSpan().SequenceEqual(Recompile(candidate)))
+                    {
+                        structuredSame = true;
+                        finalNodes = candidate;
+                        break;
+                    }
+                }
+
                 if (!structuredSame)
                 {
                     degraded++;
+                    degradedList.Add((assetName, fn.ObjectName.ToString(), firstWarn ?? "(无告警)"));
+                    finalNodes = KismetDecompiler.Decompile(bytecode, options with { Flatten = true });
                 }
 
-                // 最终产物：结构化不符时用扁平模式（与 DecompileVerified 一致）
-                var finalNodes = structuredSame
-                    ? structured
-                    : KismetDecompiler.Decompile(bytecode, options with { Flatten = true });
-
                 var rebuilt = KismetCompiler.CompileToExpressions(
-                    finalNodes, null, null, e => e.GetSize(asset), n => new FName(asset, n));
+                    finalNodes!, null, null, e => e.GetSize(asset), n => new FName(asset, n));
                 var finalBytes = Serialize(rebuilt, asset);
 
                 if (originalBytes.AsSpan().SequenceEqual(finalBytes))
@@ -146,6 +161,17 @@ Console.WriteLine($"函数          : {total}");
 Console.WriteLine($"逐字节一致    : {passed}");
 Console.WriteLine($"失败          : {total - passed}");
 Console.WriteLine($"结构化退化    : {degraded}（字节仍一致，只是退回扁平）");
+
+if (showDegraded && degradedList.Count > 0)
+{
+    Console.WriteLine();
+    Console.WriteLine("结构化退化清单（字节一致，只是退回扁平）:");
+    foreach (var (asset, fn, warn) in degradedList)
+    {
+        Console.WriteLine($"  {asset} :: {fn}");
+        Console.WriteLine($"      首个告警: {warn}");
+    }
+}
 
 if (reasons.Count > 0)
 {

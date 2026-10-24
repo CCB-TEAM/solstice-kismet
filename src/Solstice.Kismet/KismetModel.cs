@@ -381,6 +381,28 @@ public sealed record LoopNode(
     : KNode("Loop");
 
 /// <summary>
+/// 底部测条件的循环（UE 编译 <c>for</c> 循环的形态）。
+///
+/// <para>
+/// 回跳目标是**循环体开头**，不是条件，所以不能套用 <see cref="LoopNode"/>
+/// （那个是「条件在顶部」）。实际布局：
+/// </para>
+/// <code>
+/// body_start:  [Body]  条件  JumpIfNot -> exit  [Tail]  Jump -> body_start
+/// exit:
+/// </code>
+/// <para>
+/// 其中 <c>Tail</c> 通常是自增/步进部分。把它单独建节点，回编译才能把回跳补回
+/// body_start 而不是条件处（差一处就会整段结构退化）。
+/// </para>
+/// </summary>
+public sealed record BottomLoopNode(
+    IReadOnlyList<KNode> Body,
+    KArg Condition,
+    IReadOnlyList<KNode> Tail)
+    : KNode($"LoopDoWhile {ArgRender.Of(Condition)}");
+
+/// <summary>
 /// 算出来的跳转目标，对应 <c>EX_ComputedJump</c>。
 ///
 /// <para>

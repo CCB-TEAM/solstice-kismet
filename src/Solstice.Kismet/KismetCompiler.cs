@@ -643,6 +643,33 @@ public static class KismetCompiler
                     });
                     break;
 
+                case BottomLoopNode bl:
+                {
+                    // 底部测条件：体 → 条件 → JumpIfNot(exit) → 尾段 → Jump(体开头)
+                    var startIdx = result.Count;
+
+                    foreach (var n in bl.Body)
+                    {
+                        EmitNode(n);
+                    }
+
+                    var test = new EX_JumpIfNot { BooleanExpression = ToExpr(bl.Condition) };
+                    result.Add(test);
+
+                    foreach (var n in bl.Tail)
+                    {
+                        EmitNode(n);
+                    }
+
+                    var back = new EX_Jump();
+                    result.Add(back);
+
+                    var exitIdx = result.Count;
+                    patches.Add((test, exitIdx));
+                    patches.Add((back, startIdx)); // 回跳目标是循环体开头，不是条件
+                    break;
+                }
+
                 case LoopNode lp:
                 {
                     // 循环：条件 → JumpIfNot(退出) → 循环体 → Jump(回条件) → 退出落点

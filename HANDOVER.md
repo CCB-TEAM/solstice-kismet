@@ -155,16 +155,28 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 否则回编译要么多 1 字节、要么少 1 字节。同理，**无 else 的 if 绝对不能再补 `EX_Jump`**
 （UE 的条件为假时直接落到 then 之后）——补了就是 5 个多余字节。
 
-### 可读性现状（6 资产 131 函数）
+### 可读性现状（全语料 2081 资产 / 8115 函数）
 
-| 指标 | 修前 | 现在 |
+| 指标 | 初值 | 现在 |
 |---|---|---|
-| 结构还原退化（整函数退回扁平） | 47 | **3** |
-| Raw 节点总数 | 260 | 190（ubergraph 展开后另有下降） |
+| 结构化退化（整函数退回扁平） | 183 | **114**（Logic 21 / Cards 93，约 1.4%） |
 
-剩下 3 个都是**普通函数**里的共享尾部状态机：
-`BPC_TurnTimer.setTimedOutAfterReconnect`、`BP_LevelManager.TryToGoHome`、
-`BPC_ChallengeAndRematch.ParseNotification`。它们字节完全一致，只是嵌套结构还还原不出来。
+读法：退化只影响可读性，**字节永远一致**——这是 `DecompileVerified` 的硬保证。
+
+两处关键改进：
+
+1. **底部测条件的循环**（UE 编译 `for` 的形态）：回跳目标是**循环体开头**而不是条件，
+   旧模型套「条件在顶部」会把回跳补错位置。新增 `BottomLoopNode`，按
+   `体 → 条件 → JumpIfNot(exit) → 尾段 → Jump(体开头)` 重建。
+2. **结构化尝试是「机会性」的**：折叠对一部分函数有益（Logic 57→21），
+   对另一部分有害（Cards 一度 126→143）。所以 `DecompileVerified` 现在按
+   「折叠 → 不折叠 → 扁平」逐级尝试，**用字节比对裁决**，而不是一刀切。
+
+剩余 114 个的主因（合计 102 个）：`JumpIfNot 目标越出片段`——共享尾部/状态机的出口
+落在当前片段之外。下一步要么做「目标标签」机制（允许跳转指向尚未发射的位置），
+要么对这类函数改走「基本块 + 显式 goto」的输出形态，而不是继续硬凑嵌套。
+
+另有 12 个「无告警」退化：结构还原自认为成功但字节不符，多与回边目标早于重建的循环头有关。
 
 12 个 `ExecuteUbergraph_*` 已经全部**展开**成「调度头 + 入口段 + 尾声」
 （`UberGraphNode`），不再进入退化流程，细节见 [docs/ubergraph.md](docs/ubergraph.md)：

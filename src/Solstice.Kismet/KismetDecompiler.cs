@@ -12,7 +12,8 @@ public sealed record DecompileOptions(
     Func<FPackageIndex, string?>? ResolveImport = null,
     Action<string>? Warn = null,
     bool Flatten = false,
-    bool InsideUberSection = false);
+    bool InsideUberSection = false,
+    bool FoldBottomLoops = true);
 
 /// <summary>
 /// Kismet 字节码 → 平铺节点模型。
@@ -55,11 +56,31 @@ public static class KismetDecompiler
 
         var offsets = BuildOffsets(expressions, options.Measure, baseOffset);
 
+        // 底部测条件的循环：先扫回边，再在扫描到循环头时整体折叠。
+        // UE 把 for 循环编成「体 → 条件 → JumpIfNot(exit) → 自增 → Jump(体开头)」，
+        // 回跳目标在条件**之前**，所以必须先认出来，否则回跳会被补错位置。
+        var bottomLoops = options.Flatten || !options.FoldBottomLoops || offsets is null
+            ? null
+            : FindBottomTestedLoops(expressions, offsets);
+
         var nodes = new List<KNode>();
         var i = 0;
 
         while (i < expressions.Count)
         {
+            if (bottomLoops is not null && bottomLoops.TryGetValue(i, out var loop))
+            {
+                var body = Decompile(Slice(expressions, i, loop.TestIndex), options, OffAt(offsets!, i));
+                var condition = ToArg((expressions[loop.TestIndex] as EX_JumpIfNot)?.BooleanExpression, options)
+                                ?? throw new InvalidOperationException("底部测条件循环的条件表达式暂不支持");
+                var tail = Decompile(
+                    Slice(expressions, loop.TestIndex + 1, loop.JumpIndex), options, OffAt(offsets!, loop.TestIndex + 1));
+
+                nodes.Add(new BottomLoopNode(body, condition, tail));
+                i = loop.JumpIndex + 1;
+                continue;
+            }
+
             var e = expressions[i];
 
             switch (e)
@@ -317,29 +338,52 @@ public static class KismetDecompiler
 
         if (!options.Flatten)
         {
-            var structured = Decompile(expressions, options, baseOffset);
-            byte[] rebuilt;
-            try
+            // 结构还原是「尝试」而不是「断言」：先试完整花式（含底部循环折叠），
+            // 不行再退一步试保守形态，最后才退扁平。
+            // 折叠只对一部分函数有益（Logic 57→23），对另一部分有害（Cards 126→143），
+            // 所以必须用字节比对来裁决，而不是一刀切。
+            foreach (var attempt in Attempts(options))
             {
-                rebuilt = recompile(structured);
-            }
-            catch (Exception ex)
-            {
-                options.Warn?.Invoke($"结构化还原回编译失败，退回扁平模式：{ex.Message}");
-                return Decompile(expressions, options with { Flatten = true }, baseOffset);
+                var structured = Decompile(expressions, attempt, baseOffset);
+                byte[] rebuilt;
+                try
+                {
+                    rebuilt = recompile(structured);
+                }
+                catch (Exception ex)
+                {
+                    options.Warn?.Invoke($"结构化还原回编译失败（{Describe(attempt)}）：{ex.Message}");
+                    continue;
+                }
+
+                if (rebuilt.AsSpan().SequenceEqual(originalBytes))
+                {
+                    return structured;
+                }
+
+                options.Warn?.Invoke(
+                    $"结构化还原结果与原始字节不符（{Describe(attempt)}，{rebuilt.Length} vs {originalBytes.Length}）");
             }
 
-            if (rebuilt.AsSpan().SequenceEqual(originalBytes))
-            {
-                return structured;
-            }
-
-            options.Warn?.Invoke(
-                $"结构化还原结果与原始字节不符（{rebuilt.Length} vs {originalBytes.Length}），退回扁平模式");
+            options.Warn?.Invoke("所有结构化尝试均不符，退回扁平模式");
         }
 
         return Decompile(expressions, options with { Flatten = true }, baseOffset);
     }
+
+    /// <summary>结构化还原的尝试顺序：先花式，再保守。</summary>
+    private static IEnumerable<DecompileOptions> Attempts(DecompileOptions options)
+    {
+        yield return options;
+
+        if (options.FoldBottomLoops)
+        {
+            yield return options with { FoldBottomLoops = false };
+        }
+    }
+
+    private static string Describe(DecompileOptions options)
+        => options.FoldBottomLoops ? "折叠底部循环" : "保守";
 
     /// <summary>
     /// 未识别/未归类的表达式。回编译时**原样发回去**——
@@ -352,6 +396,54 @@ public static class KismetDecompiler
     // ---- 控制流 ----
 
     private readonly record struct Block(KNode Node, int Next);
+
+    /// <summary>
+    /// 找出「底部测条件」的循环：回边 <c>Jump</c> 的目标在它自己之前，
+    /// 且区间里最后一条 <c>JumpIfNot</c> 的落点正好是这条 <c>Jump</c> 的下一条。
+    ///
+    /// <para>
+    /// 返回 循环头下标 → (测试下标, 回跳下标)。两个条件缺一不认——
+    /// 宁可让外层退回扁平，也不要瞎折。注意测试下标必须**严格大于**循环头：
+    /// 条件就在循环头本身的那种是「顶部测条件」，交给 <c>BuildBlock</c> 处理。
+    /// </para>
+    /// </summary>
+    private static Dictionary<int, (int TestIndex, int JumpIndex)> FindBottomTestedLoops(
+        IReadOnlyList<KismetExpression> expressions,
+        uint[] offsets)
+    {
+        var loops = new Dictionary<int, (int TestIndex, int JumpIndex)>();
+
+        for (var j = 0; j < expressions.Count; j++)
+        {
+            if (expressions[j] is not EX_Jump jump)
+            {
+                continue;
+            }
+
+            var header = IndexOfOffset(offsets, jump.CodeOffset);
+            if (header < 0 || header >= j)
+            {
+                continue;
+            }
+
+            for (var k = j - 1; k > header; k--)
+            {
+                if (expressions[k] is not EX_JumpIfNot test)
+                {
+                    continue;
+                }
+
+                if (IndexOfOffset(offsets, test.CodeOffset) == j + 1)
+                {
+                    // 同一循环头只登记一次（外层优先），内层回边交给递归切片处理
+                    loops.TryAdd(header, (k, j));
+                    break;
+                }
+            }
+        }
+
+        return loops;
+    }
 
     /// <summary>
     /// 从一条 EX_JumpIfNot 还原 if / loop：
