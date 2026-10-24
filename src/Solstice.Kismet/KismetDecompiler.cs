@@ -10,7 +10,8 @@ namespace Solstice.Kismet;
 public sealed record DecompileOptions(
     Func<KismetExpression, uint>? Measure = null,
     Func<FPackageIndex, string?>? ResolveImport = null,
-    Action<string>? Warn = null);
+    Action<string>? Warn = null,
+    bool Flatten = false);
 
 /// <summary>
 /// Kismet 字节码 → 平铺节点模型。
@@ -102,7 +103,7 @@ public static class KismetDecompiler
                     i++;
                     continue;
 
-                case EX_JumpIfNot jumpIfNot when offsets is not null:
+                case EX_JumpIfNot jumpIfNot when offsets is not null && !options.Flatten:
                 {
                     var block = BuildBlock(expressions, offsets, i, jumpIfNot, options);
                     if (block is null)

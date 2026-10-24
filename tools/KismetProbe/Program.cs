@@ -87,7 +87,8 @@ Console.WriteLine($"  总计 {offset} 字节");
 var options = new DecompileOptions(
     Measure: e => e.GetSize(asset),
     ResolveImport: idx => importNames.TryGetValue(idx?.Index ?? 0, out var n) ? n : null,
-    Warn: m => Console.WriteLine("[warn] " + m));
+    Warn: m => Console.WriteLine("[warn] " + m),
+    Flatten: Environment.GetEnvironmentVariable("KISMET_FLATTEN") == "1");
 
 var nodes = KismetDecompiler.Decompile(bytecode, options);
 Console.WriteLine();
