@@ -434,6 +434,8 @@ public static class KismetDecompiler
         EX_ObjToInterfaceCast ic => new InterfaceCastArg(
             ToArg(ic.Target, options) ?? new NoObjectArg(),
             ic.ClassPtr),
+        // 包装层必须保留：脱掉会让回编译少 1 字节（EX_InterfaceContext 的 token）
+        EX_InterfaceContext icx => new InterfaceContextArg(RequireArg(icx.InterfaceValue, options)),
         EX_Int64Const la => new LongArg(la.Value),
         EX_PrimitiveCast pc => new PrimitiveCastArg(
             ToArg(pc.Target, options) ?? new IntArg(0),
@@ -622,6 +624,12 @@ public static class KismetDecompiler
     /// <summary>从变量表达式里取出变量名（FFieldPath 的最后一段）。</summary>
     private static string TargetName(KismetExpression? expression)
     {
+        // 接口上下文只是包装层，名字取里面那个变量，显示才不会变成「InterfaceContext」
+        if (expression is EX_InterfaceContext icx)
+        {
+            return TargetName(icx.InterfaceValue);
+        }
+
         var pointer = expression switch
         {
             EX_LocalVariable lv => lv.Variable,

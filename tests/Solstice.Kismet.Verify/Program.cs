@@ -128,5 +128,37 @@ var options = new DecompileOptions(Measure, ResolveImport);
     Check("无 measure: 跳转保留为原文", nodes[0].GetType().Name.Contains("Raw") || nodes[0].Title.StartsWith("<"), nodes[0].Title);
 }
 
+// ---- 6. EX_InterfaceContext 的包装层必须原样保留 ----
+// 它在 EX_Context.ObjectExpression 里包住接口变量。脱掉后回编译只剩里面的
+// EX_LocalVariable，每条少 1 字节（BP_LevelManager.ExecuteUbergraph 曾因此 37 vs 36）。
+{
+    var exprs = new KismetExpression[]
+    {
+        new EX_FinalFunction
+        {
+            StackNode = new FPackageIndex(-19),
+            Parameters =
+            [
+                new EX_InterfaceContext
+                {
+                    InterfaceValue = new EX_ObjectConst { Value = new FPackageIndex(-5) }
+                }
+            ]
+        },
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var nodes = KismetDecompiler.Decompile(exprs, options);
+    var call = nodes[0] as CallNode;
+    Check("接口上下文: 反编译保留包装", call?.Args[0] is InterfaceContextArg, call?.Args[0].GetType().Name);
+
+    var rebuilt = KismetCompiler.CompileToExpressions(nodes, CompileContext.Empty);
+    var param = (rebuilt[0] as EX_FinalFunction)?.Parameters?.FirstOrDefault();
+    Check("接口上下文: 回编译仍是 EX_InterfaceContext", param is EX_InterfaceContext, param?.Inst);
+    Check("接口上下文: 内层对象常量未丢",
+        param is EX_InterfaceContext { InterfaceValue: EX_ObjectConst { Value.Index: -5 } });
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;

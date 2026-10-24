@@ -109,6 +109,17 @@ public sealed record DynamicCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(
 /// <summary>转成接口，对应 EX_ObjToInterfaceCast（EX_CastBase）。</summary>
 public sealed record InterfaceCastArg(KArg Target, FPackageIndex ClassPtr) : KArg(PinType.Object);
 
+/// <summary>
+/// 接口上下文，对应 EX_InterfaceContext（只有子表达式，没有其他字段）。
+///
+/// <para>
+/// 它出现在 <c>EX_Context.ObjectExpression</c> 里包住一个接口变量：
+/// 反编译若把它脱掉，回编译就只剩里面的 <c>EX_LocalVariable</c>，每条少 1 字节。
+/// 这是「保留」而非「推断」的又一个例子——形态必须原样记住。
+/// </para>
+/// </summary>
+public sealed record InterfaceContextArg(KArg Value) : KArg(PinType.Object);
+
 /// <summary>64 位整数字面量，对应 EX_Int64Const。</summary>
 public sealed record LongArg(long Value) : KArg(PinType.Int);
 

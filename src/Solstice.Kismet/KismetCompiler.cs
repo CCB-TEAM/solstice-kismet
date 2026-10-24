@@ -223,6 +223,12 @@ public static class KismetCompiler
                         Target = ToExpr(ic.Target)
                     };
 
+                case InterfaceContextArg icx:
+                    return new EX_InterfaceContext
+                    {
+                        InterfaceValue = ToExpr(icx.Value)
+                    };
+
                 case LongArg la:
                     return new EX_Int64Const { Value = la.Value };
 
