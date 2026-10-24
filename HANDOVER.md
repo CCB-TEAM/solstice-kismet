@@ -47,6 +47,7 @@ src/Solstice.Kismet/
   KismetCompiler.cs    节点 → KismetExpression
   KismetDecompiler.cs  KismetExpression → 节点（含 if/loop 结构还原）
   BlockGraph.cs        基本块图：树还原不了时的可读表示（显式 goto）
+  UsmapCatalog.cs      结构体 schema 查询（成员名 → 类型），用于解析 EX_StructMemberContext
   KismetExprBuilder.cs 简单表达式构造
   ExpressionWalker.cs  变量索引（名字 → KismetPropertyPointer）
   ImportIndex.cs       Import 表 → 函数索引
@@ -61,6 +62,7 @@ tests/Solstice.Kismet.Verify/  59 项自检
 samples/Usage/         可运行的用法示例（列函数/反编译/重烘/引脚/插入写回）
 docs/bytecode.md       每个字节码指令的 token / 操作数 / 作用 / 出现场景 / 本库支持度
 docs/ubergraph.md      ubergraph 的形态实测、展开规则、以及重新烘焙的 Flag 契约
+docs/adding-a-call.md  新增一次调用的数据流向（解析/落表/生成/写回/边界）
 ```
 
 ## 四、最关键的设计原则

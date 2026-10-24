@@ -35,12 +35,16 @@ var planIndex = Array.IndexOf(args, "--plan");
 var planFunction = planIndex >= 0 && planIndex + 1 < args.Length ? args[planIndex + 1] : null;
 var classIndex = Array.IndexOf(args, "--class");
 var classRef = classIndex >= 0 && classIndex + 1 < args.Length ? args[classIndex + 1] : null;
+var structIndex = Array.IndexOf(args, "--struct");
+var structName = structIndex >= 0 && structIndex + 1 < args.Length ? args[structIndex + 1] : null;
 var varsIndex = Array.IndexOf(args, "--vars");
 var varsFunction = varsIndex >= 0 && varsIndex + 1 < args.Length ? args[varsIndex + 1] : null;
 var importsIndex = Array.IndexOf(args, "--imports");
 var importProbe = importsIndex >= 0 && importsIndex + 1 < args.Length ? args[importsIndex + 1] : null;
 
-if (!Directory.Exists(assetDir) && !File.Exists(assetDir))
+// --struct 只需要 usmap，不需要资产目录
+var needsAssets = structName is null;
+if (needsAssets && !Directory.Exists(assetDir) && !File.Exists(assetDir))
 {
     Console.Error.WriteLine($"路径不存在: {assetDir}");
     return 2;
@@ -48,12 +52,14 @@ if (!Directory.Exists(assetDir) && !File.Exists(assetDir))
 
 var usmap = new Usmap(usmapPath);
 // 第一个参数既可以是目录，也可以是单个 .uasset
-var files = File.Exists(assetDir)
-    ? new[] { assetDir }
-    : Directory.GetFiles(assetDir, "*.uasset", SearchOption.AllDirectories)
-        .OrderBy(f => f, StringComparer.Ordinal)
-        .Take(maxAssets)
-        .ToArray();
+var files = !needsAssets
+    ? []
+    : File.Exists(assetDir)
+        ? new[] { assetDir }
+        : Directory.GetFiles(assetDir, "*.uasset", SearchOption.AllDirectories)
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .Take(maxAssets)
+            .ToArray();
 
 Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPath)}" + (useWorkspace ? "（走 KismetWorkspace 门面）" : ""));
 
@@ -80,6 +86,11 @@ if (varsFunction is not null)
 if (args.Contains("--opcodes"))
 {
     return RunOpcodes(files, usmapPath);
+}
+
+if (structName is not null)
+{
+    return RunStruct(usmapPath, structName);
 }
 
 if (args.Contains("--collisions"))
@@ -472,6 +483,26 @@ static int RunCollisions(string[] files, string usmapPath, string? catalogPath)
 
 // 打印「新建调用会补出哪些 Import」：函数条目本身 + 它的 outer 链。
 // 用来核对新增导入到底是克隆来的还是合成的。
+static int RunStruct(string usmapPath, string name)
+{
+    var catalog = UsmapCatalog.Load(usmapPath);
+    var full = catalog.ResolveSchema(name);
+    Console.WriteLine($"结构 {full}（schema 总数 {catalog.SchemaCount}）");
+
+    var supers = catalog.SuperChainOf(full);
+    if (supers.Count > 0)
+    {
+        Console.WriteLine("  继承: " + string.Join(" <- ", supers));
+    }
+
+    foreach (var m in catalog.MembersOf(full))
+    {
+        Console.WriteLine($"  {m.Name,-28} {m.TypeName,-18} arrayIndex={m.ArrayIndex} size={m.ArraySize}");
+    }
+
+    return 0;
+}
+
 static int RunOpcodes(string[] files, string usmapPath)
 {
     // 统计整个语料里出现过哪些指令（含嵌套），用来判断某个指令到底会不会遇到
@@ -525,6 +556,14 @@ static int RunVars(string[] files, string usmapPath, string function)
 
     Console.WriteLine($"函数 {function} 的局部变量指针（{Path.GetFileName(file)}）:");
     foreach (var line in ws.DescribeVariables(function))
+    {
+        Console.WriteLine("  " + line);
+    }
+
+    ws.AttachUsmap(UsmapCatalog.Load(usmapPath));
+    Console.WriteLine();
+    Console.WriteLine("结构体成员访问（类型来自 usmap）:");
+    foreach (var line in ws.DescribeStructMembers(function))
     {
         Console.WriteLine("  " + line);
     }

@@ -96,6 +96,64 @@ public sealed class KismetWorkspace
 
     public void AttachObjects(ObjectCatalog objects) => Objects = objects;
 
+    /// <summary>usmap 结构体 schema（可选），用于解析结构体成员的类型。</summary>
+    public UsmapCatalog? Usmap { get; private set; }
+
+    public void AttachUsmap(UsmapCatalog usmap) => Usmap = usmap;
+
+    /// <summary>
+    /// 解析函数里所有 <c>EX_StructMemberContext</c> 的结构体与成员类型。
+    ///
+    /// <para>
+    /// 字节码只带「成员字段路径 + 归属索引」，类型要靠 usmap 的 schema 查。
+    /// <b>注意</b>：usmap 只有原生/脚本结构；蓝图资产定义的结构（<c>S_*</c>）不在其中，
+    /// 这类会显示为「不在 usmap」。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> DescribeStructMembers(string functionName)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        var lines = new List<string>();
+
+        foreach (var expr in ExpressionWalker.Walk(fn.ScriptBytecode!))
+        {
+            if (expr is not EX_StructMemberContext sm)
+            {
+                continue;
+            }
+
+            var pointer = sm.StructMemberExpression;
+            var path = pointer?.New?.Path;
+            var memberName = path is { Length: > 0 } ? path[^1].ToString() : "?";
+            var structPath = OwnerPathOf(pointer?.New?.ResolvedOwner);
+
+            if (Usmap is null)
+            {
+                lines.Add($"{memberName,-24} struct={structPath}（未载入 usmap，无法判定类型）");
+                continue;
+            }
+
+            string type;
+            try
+            {
+                var resolved = Usmap.ResolveSchema(structPath);
+                var member = Usmap.FindMember(resolved, memberName);
+                type = member is null ? "（结构里没有这个成员）" : member.TypeName;
+                structPath = resolved;
+            }
+            catch (Exception ex)
+            {
+                type = ex.Message.Contains("没有名为") ? "（不在 usmap：多为蓝图资产结构）" : ex.Message;
+            }
+
+            lines.Add($"{memberName,-24} {type,-20} struct={structPath}");
+        }
+
+        return lines.Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    }
+
     /// <summary>
     /// 把函数导入解析成 owner 完整路径，例如 <c>/Script/Engine.KismetSystemLibrary</c>。
     /// 链：Function → Class → Package。
