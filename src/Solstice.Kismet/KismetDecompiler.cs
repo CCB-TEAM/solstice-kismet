@@ -333,16 +333,42 @@ public static class KismetDecompiler
             v.VirtualFunctionName?.ToString() ?? "<?>",
             ToArgs(v.Parameters, options),
             CallShape.Virtual),
-        EX_Context ctx when ctx.ContextExpression is EX_FinalFunction inner => new CallArg(
-            options.ResolveImport?.Invoke(inner.StackNode) ?? $"<import {inner.StackNode?.Index}>",
-            ToArgs(inner.Parameters, options),
-            CallShape.Context,
-            TargetName(ctx.ObjectExpression),
-            inner.StackNode,
-            ToArg(ctx.ObjectExpression, options),
-            ctx.RValuePointer),
+        EX_Context ctx => ContextArg(ctx, options),
         _ => null
     };
+
+    /// <summary>
+    /// 把 EX_Context 还原成可嵌套的实参：外层恒为 Context，
+    /// 内层指令的形态放在 InnerShape（它不一定是 FinalFunction）。
+    /// </summary>
+    private static CallArg? ContextArg(EX_Context ctx, DecompileOptions options)
+    {
+        var objName = TargetName(ctx.ObjectExpression);
+        var objArg = ToArg(ctx.ObjectExpression, options);
+
+        switch (ctx.ContextExpression)
+        {
+            case EX_LocalVirtualFunction v:
+                return new CallArg(
+                    v.VirtualFunctionName?.ToString() ?? "<?>", ToArgs(v.Parameters, options),
+                    CallShape.Context, objName, null, objArg, ctx.RValuePointer, CallShape.Virtual);
+
+            case EX_FinalFunction f:
+            {
+                var inner = f is EX_CallMath ? CallShape.Math
+                          : f is EX_LocalFinalFunction ? CallShape.LocalFinal
+                          : CallShape.Final;
+
+                return new CallArg(
+                    options.ResolveImport?.Invoke(f.StackNode) ?? $"<import {f.StackNode?.Index}>",
+                    ToArgs(f.Parameters, options),
+                    CallShape.Context, objName, f.StackNode, objArg, ctx.RValuePointer, inner);
+            }
+
+            default:
+                return null;
+        }
+    }
 
     private static List<KArg> ToArgs(KismetExpression[]? parameters, DecompileOptions options)
     {

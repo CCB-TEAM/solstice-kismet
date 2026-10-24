@@ -153,7 +153,8 @@ public sealed record CallArg(
     string? ObjectVariable = null,
     FPackageIndex? StackNode = null,
     KArg? ObjectArg = null,
-    KismetPropertyPointer? RValuePointer = null)
+    KismetPropertyPointer? RValuePointer = null,
+    CallShape InnerShape = CallShape.Final)
     : KArg(PinType.Object);
 
 /// <summary>节点（编辑器层的逻辑单元，一行一个）。</summary>

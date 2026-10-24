@@ -212,54 +212,52 @@ public static class KismetCompiler
                     var inner = c.Args.Select(ToExpr).ToArray();
                     var stack = StackOf(c.Function, c.StackNode);
 
-                    switch (c.Shape)
+                    // 外层要不要包 EX_Context，由 Shape 决定；
+                    // 内层用哪个指令，由 InnerShape 决定（两者是独立的语义）。
+                    var effective = c.Shape == CallShape.Context ? c.InnerShape : c.Shape;
+
+                    KismetExpression call = effective switch
                     {
-                        case CallShape.Math:
-                            return new EX_CallMath { StackNode = stack, Parameters = inner };
+                        CallShape.Math => new EX_CallMath { StackNode = stack, Parameters = inner },
+                        CallShape.LocalFinal => new EX_LocalFinalFunction { StackNode = stack, Parameters = inner },
+                        CallShape.Virtual when resolveName is not null => new EX_LocalVirtualFunction
+                        {
+                            VirtualFunctionName = resolveName(c.Function),
+                            Parameters = inner
+                        },
+                        _ => new EX_FinalFunction { StackNode = stack, Parameters = inner }
+                    };
 
-                        case CallShape.LocalFinal:
-                            return new EX_LocalFinalFunction { StackNode = stack, Parameters = inner };
-
-                        case CallShape.Virtual when resolveName is not null:
-                            return new EX_LocalVirtualFunction
-                            {
-                                VirtualFunctionName = resolveName(c.Function),
-                                Parameters = inner
-                            };
+                    if (c.Shape != CallShape.Context)
+                    {
+                        return call;
                     }
 
-                    var final = new EX_FinalFunction { StackNode = stack, Parameters = inner };
+                    // 对象可以是变量（有指针），也可以是别的表达式（取成员 / 调用返回值）
+                    var objPtr = c.ObjectArg is PointerArg pa
+                        ? pa.Pointer
+                        : c.ObjectVariable is { } objVar
+                          && variables is not null
+                          && variables.TryGetValue(objVar, out var found)
+                            ? found
+                            : null;
 
-                    if (c.Shape == CallShape.Context)
+                    // 优先用反编译保留的原始指针
+                    objPtr = c.RValuePointer ?? objPtr;
+                    if (objPtr is null)
                     {
-                        // 对象可以是变量（有指针），也可以是别的表达式（取成员 / 调用返回值）
-                        var objPtr = c.ObjectArg is PointerArg pa
-                            ? pa.Pointer
-                            : c.ObjectVariable is { } objVar
-                              && variables is not null
-                              && variables.TryGetValue(objVar, out var found)
-                                ? found
-                                : null;
-
-                        // 优先用反编译保留的原始指针；没有就按变量名查
-                        objPtr = c.RValuePointer ?? objPtr;
-                        if (objPtr is null)
-                        {
-                            return final;
-                        }
-
-                        return new EX_Context
-                        {
-                            ObjectExpression = c.ObjectArg is { } oa
-                                ? ToExpr(oa)
-                                : new EX_LocalVariable { Variable = objPtr },
-                            ContextExpression = final,
-                            RValuePointer = objPtr,
-                            Offset = measure?.Invoke(final) ?? 0
-                        };
+                        return call;
                     }
 
-                    return final;
+                    return new EX_Context
+                    {
+                        ObjectExpression = c.ObjectArg is { } oa
+                            ? ToExpr(oa)
+                            : new EX_LocalVariable { Variable = objPtr },
+                        ContextExpression = call,
+                        RValuePointer = objPtr,
+                        Offset = measure?.Invoke(call) ?? 0
+                    };
                 }
 
                 default:
