@@ -24,8 +24,9 @@
 （`BP_Chat`、`BP_MatchData`、`BPC_TurnTimer`、`BP_LevelManager`、`BP_NotificationManager`、`BPC_ChallengeAndRematch`）。
 
 > **分母修正**：文档此前记的 118/119 是**错的分母**。探针列函数时用了 `.Take(30)`，
-> `BPC_ChallengeAndRematch` 实际有 48 个函数，被截到 30 个，于是 6 个函数从未被测过。
-> 去掉截断后全量是 131 个函数，全部通过。这正是第十节第 4 条「覆盖率必须核对分母」的复发。
+> `BPC_ChallengeAndRematch` 实际有 48 个函数、被截到 30 个，所以按旧口径最多只能测到 113 个函数，
+> 有 18 个从未跑过。去掉截断后全量是 **131** 个函数，全部通过。
+> 这正是第十节第 4 条「覆盖率必须核对分母」的复发。
 
 原先唯一的失败 `BP_LevelManager.ExecuteUbergraph_BP_LevelManager`（`Context 长度 37 vs 36`）
 已修复：`EX_Context.ObjectExpression` 里包着的是 **`EX_InterfaceContext`**，
@@ -131,9 +132,9 @@ UE5.6 走 `ShouldSerializeNew` 分支。用 `new KismetPropertyPointer(new FPack
 `EX_SwitchValue` 目前走 `RawArg` 原样保留，**没有做结构化还原**。
 
 **残留的结构还原 bug**：`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 现在字节一致了，
-但结构化模式仍会在 `[17] JumpIfNot 落点无效：exit=0 start=17 target=15` 处失败
-（`4249 vs 4195`），最后靠自动退化走扁平模式。这是 `EX_ComputedJump` 分发处的
-回跳目标（15）落在 `[0..1]` 之外导致的，纯可读性问题，不影响字节。
+但结构化模式仍会打印 `[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，
+回编译 4249 vs 原始 4195，最后靠自动退化走扁平模式。纯可读性问题，不影响字节。
+下一条给了排查方向。
 
 ## 七、工具用法
 
@@ -260,14 +261,18 @@ PowerShell 的 `.Replace()` 不匹配时**静默返回原字符串**，看不出
 
 ## 十一、下一步（按收益排序）
 
-### 1. 修结构还原的 `EX_ComputedJump` 回跳（可读性）
+### 1. 修结构还原的落点判定（可读性）
 
-`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 字节已一致，但结构化模式仍失败：
-`[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，回编译 4249 vs 4195，最后退化成扁平。
+`BP_LevelManager.ExecuteUbergraph_BP_LevelManager` 字节已一致，但结构化模式仍打印
+`[17] JumpIfNot 落点无效：exit=0 start=17 target=15`，回编译 4249 vs 4195，退化成扁平。
 
-根因在 `BuildBlock` 处理 `EX_ComputedJump` / `EX_PushExecutionFlow` 的跳转目标落点：
-`target=15` 落在首块 `[0..1]` 的边界外，`Block` 的 end 推导把它算成 0。
-修好之后这个函数能从扁平升级成可读的 if/loop 结构。
+已知：`target=15` 在全函数偏移表里是第 2 条（`offset[2]=15`），而 `exit` 却是 **0**——
+说明这次 `BuildBlock` 拿到的 `offsets` 不是全函数的那张表（`offsets[0]` 已经 ≥ 15）。
+推断是嵌套 `Decompile` 的 `baseOffset` 与 `start` 下标不在同一坐标系里（待验证）。
+`IndexOfOffset` 返回 0 后 `exit <= start` 判无效，整个 if 结构丢失。
+
+排查顺序：在 `BuildBlock` 打 `offsets[0] / baseOffset / start / exit`，
+确认嵌套切片的 `start` 是「切片内下标」还是「全函数下标」；两者混用是这个 bug 的根源。
 
 ### 2. `EX_SwitchValue` 结构化还原（提升可读性）
 
