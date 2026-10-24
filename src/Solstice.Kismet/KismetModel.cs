@@ -224,7 +224,7 @@ public sealed record CallNode(string Function, IReadOnlyList<KArg> Args, string?
 public sealed record IfNode(KArg Condition, IReadOnlyList<KNode> Then, IReadOnlyList<KNode>? Else = null)
     : KNode("If");
 
-public sealed record ReturnNode() : KNode("Return");
+public sealed record ReturnNode(KArg? Value = null) : KNode("Return");
 
 /// <summary>赋值：把值写进一个变量。</summary>
 public sealed record AssignNode(

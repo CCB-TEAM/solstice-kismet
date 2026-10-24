@@ -560,8 +560,12 @@ public static class KismetCompiler
                     result.Add(raw.Expression);
                     break;
 
-                case ReturnNode:
-                    result.Add(new EX_Return { ReturnExpression = new EX_Nothing() });                    break;
+                case ReturnNode rn:
+                    result.Add(new EX_Return
+                    {
+                        ReturnExpression = rn.Value is { } rv ? ToExpr(rv) : new EX_Nothing()
+                    });
+                    break;
             }
         }
 

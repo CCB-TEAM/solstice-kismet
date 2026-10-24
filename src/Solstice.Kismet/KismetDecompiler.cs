@@ -98,8 +98,8 @@ public static class KismetDecompiler
                     i++;
                     continue;
 
-                case EX_Return:
-                    nodes.Add(new ReturnNode());
+                case EX_Return ret:
+                    nodes.Add(new ReturnNode(ToArg(ret.ReturnExpression, options)));
                     i++;
                     continue;
 
