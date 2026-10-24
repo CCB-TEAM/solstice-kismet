@@ -259,6 +259,7 @@ public static class KismetDecompiler
         EX_False => new BoolArg(false),
         EX_NameConst nc => new NameArg(nc.Value),
         EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
+        EX_LocalOutVariable lo => new PointerArg(lo.Variable!, TargetName(lo), Out: true),
         EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
         // 注意：EX_LocalFinalFunction / EX_CallMath 都继承自 EX_FinalFunction，
         // 必须排在 EX_FinalFunction 之前，否则永远匹配不到。
@@ -318,6 +319,7 @@ public static class KismetDecompiler
     private static PointerArg? PointerOf(KismetExpression? e) => e switch
     {
         EX_LocalVariable lv => new PointerArg(lv.Variable!, TargetName(lv)),
+        EX_LocalOutVariable lo => new PointerArg(lo.Variable!, TargetName(lo), Out: true),
         EX_InstanceVariable iv => new PointerArg(iv.Variable!, TargetName(iv), Instance: true),
         _ => null
     };
@@ -328,6 +330,7 @@ public static class KismetDecompiler
         var pointer = expression switch
         {
             EX_LocalVariable lv => lv.Variable,
+            EX_LocalOutVariable lo => lo.Variable,
             EX_InstanceVariable iv => iv.Variable,
             _ => null
         };

@@ -74,6 +74,8 @@ for (var i = 0; i < bytecode.Length; i++)
         EX_FinalFunction ff => importNames.TryGetValue(ff.StackNode?.Index ?? 0, out var n) ? n : $"<{ff.StackNode?.Index}>",
         EX_LocalVirtualFunction v => v.VirtualFunctionName?.ToString() ?? "",
         EX_IntConst ic => ic.Value.ToString(),
+        EX_LetBool lb => $"varType={lb.VariableExpression?.GetType().Name} valType={lb.AssignmentExpression?.GetType().Name}",
+        EX_Let l2 => $"varType={l2.Variable?.GetType().Name} valType={l2.Expression?.GetType().Name}",
         _ => ""
     };
     Console.WriteLine($"  {i,4}  off={offset,-6} {e.Inst,-24} {extra}");

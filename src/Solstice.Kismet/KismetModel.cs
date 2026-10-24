@@ -82,7 +82,7 @@ public sealed record LocalArg(string Name) : KArg(PinType.Int);
 /// <summary>
 /// 原样保留的属性指针。反编译时用它，避免多段 FFieldPath / ResolvedOwner 被压平成名字后丢失信息。
 /// </summary>
-public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool Instance = false)
+public sealed record PointerArg(KismetPropertyPointer Pointer, string Name, bool Instance = false, bool Out = false)
     : KArg(PinType.Object);
 
 /// <summary>布尔字面量，对应 EX_True / EX_False。</summary>

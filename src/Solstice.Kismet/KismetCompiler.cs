@@ -143,6 +143,12 @@ public static class KismetCompiler
         /// 把数据流参数转成表达式。支持嵌套调用（<see cref="CallArg"/>），
         /// 这样一个调用的返回值可以直接作为另一个调用的参数或对象。
         /// </summary>
+        /// <summary>变量表达式的三种形态：局部 / 实例 / 函数输出参数。</summary>
+        static KismetExpression TargetExpr(PointerArg? kind, KismetPropertyPointer pointer)
+            => kind is { Out: true } ? new EX_LocalOutVariable { Variable = pointer }
+             : kind is { Instance: true } ? new EX_InstanceVariable { Variable = pointer }
+             : new EX_LocalVariable { Variable = pointer };
+
         KismetExpression ToExpr(KArg arg)
         {
             switch (arg)
@@ -154,9 +160,7 @@ public static class KismetCompiler
                     return b.Value ? new EX_True() : new EX_False();
 
                 case PointerArg p:
-                    return p.Instance
-                        ? new EX_InstanceVariable { Variable = p.Pointer }
-                        : new EX_LocalVariable { Variable = p.Pointer };
+                    return TargetExpr(p, p.Pointer);
 
                 case LocalArg l when variables is not null && variables.TryGetValue(l.Name, out var pointer):
                     // 复用现有字节码里的属性指针：FFieldPath 自带变量名与归属索引
@@ -164,6 +168,7 @@ public static class KismetCompiler
 
                 case NameArg n:
                     return new EX_NameConst { Value = n.Value };
+
 
                 case CallArg c:
                 {
@@ -246,9 +251,7 @@ public static class KismetCompiler
                     result.Add(new EX_Let
                     {
                         Value = pointer,
-                        Variable = a.TargetPointer is { Instance: true }
-                            ? new EX_InstanceVariable { Variable = pointer }
-                            : new EX_LocalVariable { Variable = pointer },
+                        Variable = TargetExpr(a.TargetPointer, pointer),
                         Expression = ToExpr(a.Value)
                     });
                     break;
@@ -371,9 +374,7 @@ public static class KismetCompiler
                     // EX_LetBool：变量用表达式表示（不像 EX_Let 还要单独的 Value 指针）
                     result.Add(new EX_LetBool
                     {
-                        VariableExpression = ab.TargetPointer is { Instance: true }
-                            ? new EX_InstanceVariable { Variable = pointer }
-                            : new EX_LocalVariable { Variable = pointer },
+                        VariableExpression = TargetExpr(ab.TargetPointer, pointer),
                         AssignmentExpression = ToExpr(ab.Value)
                     });
                     break;
