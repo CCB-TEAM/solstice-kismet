@@ -73,6 +73,10 @@ if (catalogPath is not null && File.Exists(catalogPath))
 
     var plan = ws.PlanCall("PrintString");
     Console.WriteLine($"[4] PlanCall(PrintString): shape={plan.Shape}, owner={plan.OwnerPath}");
+
+    // 推荐用法：先解析成「引用」，之后不再按名字查表
+    var callee = ws.ResolveFunction("PrintString");
+    Console.WriteLine($"    引用: {callee}  idx={callee?.Index.Index} exported={callee?.IsExported}");
     foreach (var pin in plan.Pins)
     {
         var mark = pin.IsOutput ? "->" : pin.IsPlaceholder ? "??" : "  ";
@@ -84,7 +88,7 @@ if (catalogPath is not null && File.Exists(catalogPath))
     // ---- 场景 5：插入一次调用并写回，再读回来确认 ----
     var target = smallest;
     var before = ws.ExpressionCount(target);
-    ws.InsertCall(target, "Greater_IntInt");
+    ws.InsertCall(target, ws.ResolveFunction("Greater_IntInt")!);   // 传引用，不传名字
     var after = ws.ExpressionCount(target);
 
     var saved = ws.Save(workDir, "edited.uasset");

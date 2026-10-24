@@ -37,13 +37,18 @@ var baked = ws.BakeUbergraph("ExecuteUbergraph_BP_Chat");
 // baked.EntryOffsets / baked.EpilogueOffset
 
 // 2.6 新增一次调用（SDK 常用）：
-//     形态按 jmap 签名选；函数不在 Import 表里会自动补条目；
-//     不给参数时按签名自动生成占位参数
-var call = ws.CreateCall("Greater_IntInt");      // [IntArg(0), IntArg(0)]
-var onThis = ws.CreateCall("ClearCardTexts");    // 非静态 → EX_Context + this
+//     推荐先解析成「引用」——它自带归属类与包索引，之后不再按名字查表（无歧义）
+var callee = ws.ResolveFunction("Greater_IntInt");
+//   callee.FullPath = /Script/Engine.KismetMathLibrary.Greater_IntInt
+//   callee.Index.Index = -124（Import）或正数（本资产导出）
+var call = ws.CreateCall(callee);          // 参数按 jmap 签名自动生成
+var onThis = ws.CreateCall(ws.ResolveFunction("ClearCardTexts")!);  // 非静态 → EX_Context + this
+
+// 同名函数挂在不同类下时，只给名字会**报错并列出候选**，逼你指定归属：
+//   ws.ResolveFunction("GetSession", "/Script/kards.KardsSession")
 
 // 2.7 读-改-写一条龙：反编译（已字节校验）→ 改 → 编译写回
-ws.InsertCall("SomeFunction", "KardsClearLaunchNotification");   // 末尾插一次调用
+ws.InsertCall("SomeFunction", ws.ResolveFunction("KardsClearLaunchNotification")!);  // 传引用
 ws.Edit("SomeFunction", nodes => nodes.SkipLast(1));             // 任意变换
 
 // 想先看引脚、哪些参数只是占位（编辑器 UI 用）

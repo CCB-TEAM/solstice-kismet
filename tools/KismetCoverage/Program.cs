@@ -540,9 +540,13 @@ static int RunInsert(string[] files, string usmapPath, string callee, string? ca
 
             total++;
 
+            // 先解析成引用（带归属 + 索引），后续插入不再按名字查表
+            var calleeRef = ws.ResolveFunction(callee)
+                            ?? throw new InvalidOperationException($"找不到函数 {callee}");
+
             // 便捷 API：一行完成「反编译 + 插入调用 + 编译写回」
-            ws.InsertCall(target, callee);
-            var expectedArgs = catalog.Find(null, callee)?.Inputs.Count ?? -1;
+            ws.InsertCall(target, calleeRef);
+            var expectedArgs = calleeRef.Signature?.Inputs.Count ?? catalog.Find(null, callee)?.Inputs.Count ?? -1;
             var saved = ws.Save(workDir, "inserted.uasset");
 
             // 重新打开存盘结果，确认新调用能反编译回来（参数个数也要对上）

@@ -248,7 +248,8 @@ CI 机器上没有资产，自检跑不到它。
 | `Decompile(name)` | 反编译成节点（三种表示之一，已字节校验） |
 | `Edit(name, transform)` | 反编译 → 交给委托改 → 编译写回 |
 | `InsertCall(name, callee)` | 在末尾（Return 之前）插一次调用，参数按签名自动生成 |
-| `CreateCall(name)` | 只造节点，不写回；形态按签名选，Import 缺失时自动补 |
+| `ResolveFunction(name, owner?)` | **解析成引用**（名字 + 归属 + 包索引），同名歧义时报错并列出候选 |
+| `CreateCall(ref)` | 只造节点，不写回；形态按签名选，Import 缺失时自动补 |
 | `DefaultArgs(name)` | 看默认参数，`IsPlaceholder` 标出无法忠实合成的 |
 | `PlanCall(name)` | 引脚级描述（编辑器 UI 用），同标占位 |
 | `BakeUbergraph(name)` | 重烘 ubergraph 并返回入口偏移表 |

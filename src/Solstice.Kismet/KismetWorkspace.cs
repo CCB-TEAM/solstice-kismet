@@ -120,59 +120,133 @@ public sealed class KismetWorkspace
         => Catalog?.Find(FunctionOwnerPath(functionName), functionName);
 
     /// <summary>
-    /// 新建一次调用（编辑器「插入节点」用）。
+    /// 解析一个函数引用（推荐用它代替「只传名字」）。
     ///
     /// <para>
-    /// 形态按 <see cref="FunctionCatalog"/> 的签名选，这是 jmap 真正的用武之地：
+    /// 顺序：① 给了 <paramref name="ownerPath"/> 就按 <c>(名字, 归属)</c> 精确查；
+    /// ② 否则找本资产导出的同名函数；③ 再找 Import 表——**同名多个且归属不同时直接报错**
+    /// （把候选列出来，让人选，而不是悄悄取第一个）；④ 都没有才按 jmap 签名补导入。
     /// </para>
-    /// <list type="bullet">
-    /// <item>本资产导出的函数 → <see cref="VirtualCallNode"/>（<c>EX_LocalVirtualFunction</c>）</item>
-    /// <item>签名含 <c>FUNC_Static</c> → <see cref="CallNode"/>（<c>EX_FinalFunction</c>）</item>
-    /// <item>其余 → <see cref="ContextCallNode"/>（<c>EX_Context</c>，对象默认 <c>this</c>）</item>
-    /// </list>
+    /// </summary>
+    /// <param name="ensureImport">
+    /// 为 true 时，若函数还不在 Import 表里就补一条（需要 jmap 签名提供归属）。
+    /// 设为 false 则只解析、不改资产。
+    /// </param>
+    public FunctionRef? ResolveFunction(string functionName, string? ownerPath = null, bool ensureImport = true)
+    {
+        var byOwner = FunctionImportOwners();
+
+        // ① 精确匹配
+        if (!string.IsNullOrWhiteSpace(ownerPath))
+        {
+            return byOwner.TryGetValue(new FunctionKey(functionName, ownerPath), out var exact)
+                ? new FunctionRef(functionName, ownerPath, exact, false, Catalog?.Find(ownerPath, functionName))
+                : Ensure(functionName, ownerPath, ensureImport);
+        }
+
+        // ② 本资产导出
+        for (var i = 0; i < _asset.Exports.Count; i++)
+        {
+            if (_asset.Exports[i] is FunctionExport fn && fn.ObjectName?.ToString() == functionName)
+            {
+                return new FunctionRef(functionName, "", new FPackageIndex(i + 1), true, Catalog?.Find(null, functionName));
+            }
+        }
+
+        // ③ Import 表：唯一才接受
+        var candidates = byOwner.Where(kv => kv.Key.Name == functionName).ToArray();
+        if (candidates.Length == 1)
+        {
+            var only = candidates[0];
+            return new FunctionRef(functionName, only.Key.Owner, only.Value, false, Catalog?.Find(only.Key.Owner, functionName));
+        }
+
+        if (candidates.Length > 1)
+        {
+            var listed = string.Join("\n  ", candidates.Select(c => c.Key.Owner));
+            throw new InvalidOperationException(
+                $"{functionName} 在 Import 表里有 {candidates.Length} 个归属，无法只凭名字确定：\n  {listed}\n" +
+                "请用 ResolveFunction(name, ownerPath) 指定归属。");
+        }
+
+        // ④ 靠 jmap 的归属补导入
+        var signature = Catalog?.Find(null, functionName)
+                        ?? throw new InvalidOperationException(
+                            $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）——不猜归属");
+
+        return Ensure(functionName, signature.OwnerPath, ensureImport);
+
+        FunctionRef? Ensure(string name, string owner, bool doIt)
+        {
+            var signature = Catalog?.Find(owner, name);
+            if (!doIt)
+            {
+                return new FunctionRef(name, owner, new FPackageIndex(0), false, signature);
+            }
+
+            if (Objects is not null
+                && Objects.Find(owner) is { } info
+                && !string.Equals(info.Type, "Class", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"{owner} 在对象表里是 {info.Type}，不是类——拒绝按它补导入");
+            }
+
+            var index = ImportIndex.EnsureFunction(_asset, name, owner);
+            return new FunctionRef(name, owner, index, false, signature);
+        }
+    }
+
+    /// <summary>
+    /// 按 jmap 签名选调用形态——本资产导出 → <see cref="VirtualCallNode"/>、
+    /// <c>FUNC_Static</c> → <see cref="CallNode"/>、其余 → <see cref="ContextCallNode"/>。
+    ///
     /// <para>
     /// 没有签名表时**直接报错**，不猜形态——形态猜错会让字节看起来对、运行时行为错。
     /// </para>
     /// </summary>
     /// <param name="args">参数；给 <c>null</c> 时按签名自动生成（见 <see cref="DefaultArgs"/>）。</param>
     /// <param name="self">非静态函数的调用对象；不给则用 <c>this</c>。</param>
-    public KNode CreateCall(string functionName, IReadOnlyList<KArg>? args = null, KArg? self = null)
+    public KNode CreateCall(FunctionRef function, IReadOnlyList<KArg>? args = null, KArg? self = null)
     {
-        if (Functions.Contains(functionName, StringComparer.Ordinal))
+        if (function.IsExported)
         {
-            return new VirtualCallNode(functionName, args ?? []);
+            return new VirtualCallNode(function.Name, args ?? []);
         }
 
-        var signature = Catalog?.Find(null, functionName)
+        var signature = function.Signature
+                        ?? Catalog?.Find(function.OwnerPath, function.Name)
                         ?? throw new InvalidOperationException(
-                            $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）——不猜调用形态");
+                            $"没有 {function.FullPath} 的签名——不猜调用形态（先 AttachCatalog）");
 
-        args ??= DefaultArgs(functionName).Select(a => a.Value).ToArray();
+        args ??= DefaultArgs(function.Name, function.OwnerPath).Select(a => a.Value).ToArray();
 
-        // 对象表在的话核对一下：jmap 给的归属必须真的是个类，否则补出来的导入会挂错地方
-        if (Objects is not null
-            && Objects.Find(signature.OwnerPath) is { } owner
-            && !string.Equals(owner.Type, "Class", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"{signature.OwnerPath} 在对象表里是 {owner.Type}，不是类——拒绝按它补导入");
-        }
-
-        var index = ImportIndex.EnsureFunction(_asset, functionName, signature.OwnerPath);
+        // 引用里的索引为 0 说明只解析没落表，这里补上
+        var index = function.Index.Index != 0
+            ? function.Index
+            : ImportIndex.EnsureFunction(_asset, function.Name, function.OwnerPath);
 
         if (signature.IsStatic)
         {
-            return new CallNode(functionName, args, signature.OwnerPath, index);
+            return new CallNode(function.Name, args, function.OwnerPath, index);
         }
 
         return new ContextCallNode(
             "this",
-            functionName,
+            function.Name,
             args,
-            Owner: signature.OwnerPath,
+            Owner: function.OwnerPath,
             ObjectArg: self ?? new SelfArg(),
             InnerShape: CallShape.Final,
             StackNode: index);
+    }
+
+    /// <summary>按名字新建调用（内部先 <see cref="ResolveFunction"/>，有歧义会报错）。</summary>
+    public KNode CreateCall(string functionName, IReadOnlyList<KArg>? args = null, KArg? self = null)
+    {
+        var function = ResolveFunction(functionName)
+                       ?? throw new InvalidOperationException($"找不到函数 {functionName}");
+
+        return CreateCall(function, args, self);
     }
 
     /// <summary>
@@ -203,8 +277,16 @@ public sealed class KismetWorkspace
         string functionName,
         string calleeName,
         params KArg[] args)
+        => InsertCall(functionName, ResolveFunction(calleeName)
+            ?? throw new InvalidOperationException($"找不到函数 {calleeName}"), args);
+
+    /// <summary>按引用插入调用（推荐：无歧义）。</summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) InsertCall(
+        string functionName,
+        FunctionRef callee,
+        params KArg[] args)
     {
-        var call = CreateCall(calleeName, args.Length > 0 ? args : null);
+        var call = CreateCall(callee, args.Length > 0 ? args : null);
 
         return Edit(functionName, nodes =>
         {
@@ -243,13 +325,23 @@ public sealed class KismetWorkspace
     /// </para>
     /// </summary>
     public CallPlan PlanCall(string functionName, IReadOnlyList<KArg>? args = null)
-    {
-        var signature = Catalog?.Find(null, functionName)
-                        ?? throw new InvalidOperationException(
-                            $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）");
+        => PlanCall(ResolveFunction(functionName, ensureImport: false), args);
 
-        var defaults = DefaultArgs(functionName);
-        var shape = Functions.Contains(functionName, StringComparer.Ordinal)
+    /// <summary>按引用生成调用计划（推荐：无歧义）。</summary>
+    public CallPlan PlanCall(FunctionRef? function, IReadOnlyList<KArg>? args = null)
+    {
+        if (function is null)
+        {
+            throw new InvalidOperationException("函数引用为空");
+        }
+
+        var signature = function.Signature
+                        ?? Catalog?.Find(function.OwnerPath, function.Name)
+                        ?? throw new InvalidOperationException(
+                            $"没有 {function.FullPath} 的签名（先 AttachCatalog 载入 jmap functions.json）");
+
+        var defaults = DefaultArgs(function.Name, function.OwnerPath);
+        var shape = function.IsExported
             ? CallShape.Virtual
             : signature.IsStatic ? CallShape.Final : CallShape.Context;
 
@@ -276,7 +368,7 @@ public sealed class KismetWorkspace
             }
         }
 
-        return new CallPlan(functionName, signature.OwnerPath, signature.Flags, shape, pins);
+        return new CallPlan(function.FullPath, signature.OwnerPath, signature.Flags, shape, pins);
     }
 
     /// <summary>函数导入的身份：名字 + 归属类全路径。同名函数挂在不同类下必须区分开。</summary>
@@ -405,9 +497,9 @@ public sealed class KismetWorkspace
     /// <see cref="NoObjectArg"/> 占位并标记 <c>IsPlaceholder</c>，调用方必须替换。
     /// </para>
     /// </summary>
-    public IReadOnlyList<DefaultArg> DefaultArgs(string functionName)
+    public IReadOnlyList<DefaultArg> DefaultArgs(string functionName, string? ownerPath = null)
     {
-        var signature = Catalog?.Find(null, functionName)
+        var signature = Catalog?.Find(ownerPath, functionName)
                         ?? throw new InvalidOperationException(
                             $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）");
 
