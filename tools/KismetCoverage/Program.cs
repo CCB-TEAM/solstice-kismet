@@ -27,6 +27,10 @@ var maxAssets = args.Length > 2 && args[2] == "--max" ? int.Parse(args[3]) : int
 var verbose = args.Contains("--verbose");
 var showDegraded = args.Contains("--degraded");
 var useWorkspace = args.Contains("--workspace");
+var insertIndex = Array.IndexOf(args, "--insert");
+var insertCallee = insertIndex >= 0 && insertIndex + 1 < args.Length ? args[insertIndex + 1] : null;
+var catalogIndex = Array.IndexOf(args, "--catalog");
+var catalogPath = catalogIndex >= 0 && catalogIndex + 1 < args.Length ? args[catalogIndex + 1] : null;
 
 if (!Directory.Exists(assetDir))
 {
@@ -41,6 +45,11 @@ var files = Directory.GetFiles(assetDir, "*.uasset", SearchOption.AllDirectories
     .ToArray();
 
 Console.WriteLine($"资产 {files.Length} 个，usmap={Path.GetFileName(usmapPath)}" + (useWorkspace ? "（走 KismetWorkspace 门面）" : ""));
+
+if (insertCallee is not null)
+{
+    return RunInsert(files, usmapPath, insertCallee, catalogPath);
+}
 
 if (useWorkspace)
 {
@@ -286,6 +295,133 @@ static int RunWorkspace(string[] files, string usmapPath)
     }
 
     return failures.Count == 0 ? 0 : 1;
+}
+
+// 插入调用端到端验证：反编译 → CreateCall（按 jmap 签名选形态）→ 编译写回 →
+// 存盘 → 重新打开 → 反编译确认新调用在、且能再读回来。
+// 走的是编辑器「插入节点」的完整链路。
+static int RunInsert(string[] files, string usmapPath, string callee, string? catalogPath)
+{
+    if (catalogPath is null || !File.Exists(catalogPath))
+    {
+        Console.Error.WriteLine("--insert 需要 --catalog <functions.json>");
+        return 2;
+    }
+
+    var workDir = Path.Combine(Path.GetTempPath(), "kismet-insert-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(workDir);
+
+    var usmapBytes = File.ReadAllBytes(usmapPath);
+    var catalogBytes = File.ReadAllText(catalogPath);
+    var catalog = FunctionCatalog.Load(catalogBytes);
+
+    var total = 0;
+    var ok = 0;
+    var failures = new List<string>();
+
+    foreach (var file in files)
+    {
+        var name = Path.GetFileNameWithoutExtension(file);
+        var uexp = Path.ChangeExtension(file, ".uexp");
+        if (!File.Exists(uexp))
+        {
+            continue;
+        }
+
+        try
+        {
+            var ws = KismetWorkspace.Open(File.ReadAllBytes(file), File.ReadAllBytes(uexp), usmapBytes, workDir);
+            ws.AttachCatalog(catalog);
+
+            // 挑最小的函数，改动面最小
+            var target = ws.Functions.OrderBy(f => ws.ExpressionCount(f)).FirstOrDefault();
+            if (target is null)
+            {
+                continue;
+            }
+
+            total++;
+
+            var nodes = ws.Decompile(target).ToList();
+            var call = ws.CreateCall(callee, []);
+            if (nodes.Count > 0 && nodes[^1] is ReturnNode)
+            {
+                nodes.Insert(nodes.Count - 1, call);
+            }
+            else
+            {
+                nodes.Add(call);
+            }
+
+            ws.Generate(nodes, target);
+            var saved = ws.Save(workDir, "inserted.uasset");
+
+            // 重新打开存盘结果，确认新调用能反编译回来
+            var reopened = KismetWorkspace.Open(saved.UAsset, saved.UExp, usmapBytes, workDir + "-re");
+            var again = reopened.Decompile(target);
+
+            var found = ContainsCall(again, callee);
+            if (found)
+            {
+                ok++;
+            }
+            else
+            {
+                failures.Add($"{name} :: {target} :: 写回后找不到 {callee}");
+            }
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"{name} :: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    foreach (var dir in new[] { workDir, workDir + "-re" })
+    {
+        if (Directory.Exists(dir))
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"插入调用 {callee}: 资产 {total}，成功 {ok}，失败 {failures.Count}");
+    foreach (var f in failures.Take(20))
+    {
+        Console.WriteLine("  " + f);
+    }
+
+    return failures.Count == 0 ? 0 : 1;
+}
+
+static bool ContainsCall(IEnumerable<KNode> nodes, string callee)
+{
+    foreach (var node in nodes)
+    {
+        switch (node)
+        {
+            case CallNode c when c.Function == callee:
+            case VirtualCallNode v when v.Function == callee:
+            case ContextCallNode cc when cc.Function == callee:
+            case MathCallNode m when m.Function == callee:
+            case LocalFinalCallNode lf when lf.Function == callee:
+                return true;
+
+            case IfNode f when ContainsCall(f.Then, callee) || (f.Else is { } e && ContainsCall(e, callee)):
+                return true;
+
+            case LoopNode loop when ContainsCall(loop.Body, callee):
+                return true;
+
+            case BlockGraphNode graph when graph.Blocks.Any(b => ContainsCall(b.Nodes, callee)):
+                return true;
+
+            case UberGraphNode uber when uber.Sections.Any(s => ContainsCall(s.Nodes, callee)):
+                return true;
+        }
+    }
+
+    return false;
 }
 
 static void Bump(Dictionary<string, int> map, string key)

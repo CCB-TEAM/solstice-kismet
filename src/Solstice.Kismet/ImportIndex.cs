@@ -128,11 +128,19 @@ public static class ImportIndex
         return new FPackageIndex(-asset.Imports.Count);
     }
 
-    private static Import? FindTemplate(UAsset asset, string className, string? excludeObject)
+    private static Import FindTemplate(UAsset asset, string className, string? excludeObject)
         => asset.Imports.FirstOrDefault(im =>
             im.ClassName?.ToString() == className &&
             im.ObjectName?.ToString() is { Length: > 0 } n &&
-            n != excludeObject);
+            n != excludeObject)
+           // 接口类资产可能一条该类型的导入都没有，这时按 UE 的固定约定新建
+           // （包/类/函数三级导入的 ClassPackage 都是 /Script/CoreUObject）
+           ?? new Import(
+               new FName(asset, "/Script/CoreUObject"),
+               new FName(asset, className),
+               new FPackageIndex(0),
+               new FName(asset, className),
+               false);
 
     private static Import CloneAs(Import template, FName objectName, FPackageIndex outer)
         => new(template.ClassPackage, template.ClassName, outer, objectName, template.bImportOptional)

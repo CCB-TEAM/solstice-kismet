@@ -115,7 +115,50 @@ public sealed class KismetWorkspace
         => Catalog?.Find(FunctionOwnerPath(functionName), functionName);
 
     /// <summary>
-    /// 把一个函数反编译成节点。
+    /// 新建一次调用（编辑器「插入节点」用）。
+    ///
+    /// <para>
+    /// 形态按 <see cref="FunctionCatalog"/> 的签名选，这是 jmap 真正的用武之地：
+    /// </para>
+    /// <list type="bullet">
+    /// <item>本资产导出的函数 → <see cref="VirtualCallNode"/>（<c>EX_LocalVirtualFunction</c>）</item>
+    /// <item>签名含 <c>FUNC_Static</c> → <see cref="CallNode"/>（<c>EX_FinalFunction</c>）</item>
+    /// <item>其余 → <see cref="ContextCallNode"/>（<c>EX_Context</c>，对象默认 <c>this</c>）</item>
+    /// </list>
+    /// <para>
+    /// 没有签名表时**直接报错**，不猜形态——形态猜错会让字节看起来对、运行时行为错。
+    /// </para>
+    /// </summary>
+    /// <param name="self">非静态函数的调用对象；不给则用 <c>this</c>。</param>
+    public KNode CreateCall(string functionName, IReadOnlyList<KArg> args, KArg? self = null)
+    {
+        if (Functions.Contains(functionName, StringComparer.Ordinal))
+        {
+            return new VirtualCallNode(functionName, args);
+        }
+
+        var signature = Catalog?.Find(null, functionName)
+                        ?? throw new InvalidOperationException(
+                            $"没有 {functionName} 的签名（先 AttachCatalog 载入 jmap functions.json）——不猜调用形态");
+
+        var index = ImportIndex.EnsureFunction(_asset, functionName, signature.OwnerPath);
+
+        if (signature.IsStatic)
+        {
+            return new CallNode(functionName, args, signature.OwnerPath, index);
+        }
+
+        return new ContextCallNode(
+            "this",
+            functionName,
+            args,
+            Owner: signature.OwnerPath,
+            ObjectArg: self ?? new SelfArg(),
+            InnerShape: CallShape.Final,
+            StackNode: index);
+    }
+
+    /// <summary>把一个函数反编译成节点。
     ///
     /// <para>
     /// 结果一定是三种可读表示之一：树形结构化 / ubergraph 展开 / 基本块图；
@@ -305,18 +348,18 @@ public sealed class KismetWorkspace
         .FirstOrDefault(x => x.ObjectName.ToString() == name);
 
     /// <summary>递归收集节点里所有「按 Import 索引解析」的调用目标。</summary>
-    private static IEnumerable<(string Name, string? Owner)> CollectCallTargets(IEnumerable<KNode> nodes)
+    private IEnumerable<(string Name, string? Owner)> CollectCallTargets(IEnumerable<KNode> nodes)
     {
         foreach (var node in nodes)
         {
             switch (node)
             {
                 case CallNode c:
-                    yield return (c.Function, c.Owner);
+                    yield return (c.Function, c.Owner ?? Catalog?.Find(null, c.Function)?.OwnerPath);
                     break;
 
                 case ContextCallNode cc:
-                    yield return (cc.Function, cc.Owner);
+                    yield return (cc.Function, cc.Owner ?? Catalog?.Find(null, cc.Function)?.OwnerPath);
                     break;
 
                 case IfNode f:

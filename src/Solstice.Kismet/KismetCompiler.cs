@@ -130,6 +130,10 @@ public static class KismetCompiler
         CompileContext context)
         => CompileToExpressions(nodes, context.Variables, context.Functions, context.Measure, context.ResolveName);
 
+    /// <summary>空属性指针（0 段路径 + owner 0）。新建的无返回值调用用它。</summary>
+    private static KismetPropertyPointer EmptyPropertyPointer()
+        => new(new FFieldPath { Path = [], ResolvedOwner = new FPackageIndex(0) });
+
     /// <summary>重新烘焙 ubergraph 的结果：表达式 + 需要写回 UClass 的入口偏移表。</summary>
     public sealed record UbergraphBakeResult(
         IReadOnlyList<KismetExpression> Expressions,
@@ -459,10 +463,10 @@ public static class KismetCompiler
 
                     // 优先用反编译保留的原始指针
                     objPtr = c.RValuePointer ?? objPtr;
-                    if (objPtr is null)
-                    {
-                        return call;
-                    }
+
+                    // 新建的调用没有原始指针：用空 FFieldPath（0 段路径 + owner 0）。
+                    // UE 对「没有返回值的调用」写的就是这种空指针；XFER_PROP_POINTER 要求 New 非空。
+                    objPtr ??= EmptyPropertyPointer();
 
                     return MakeContext(
                         c.ContextKind,
@@ -526,10 +530,7 @@ public static class KismetCompiler
 
                     // 优先用反编译保留的原始指针
                     objPtr = cc.RValuePointer ?? objPtr;
-                    if (objPtr is null)
-                    {
-                        throw new InvalidOperationException($"跨对象调用 {cc.Function} 缺少 RValuePointer");
-                    }
+                    objPtr ??= EmptyPropertyPointer();
 
                     // ContextExpression 的形态由 InnerShape 决定，不一定都是 FinalFunction。
                     // StackNode 必须用反编译保留的那个：同名导入可能有多个，按名字查会取错索引。

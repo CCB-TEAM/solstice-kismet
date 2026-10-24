@@ -36,6 +36,11 @@ var nodes0 = ws.Decompile("ExecuteUbergraph_BP_Chat");
 var baked = ws.BakeUbergraph("ExecuteUbergraph_BP_Chat");
 // baked.EntryOffsets / baked.EpilogueOffset
 
+// 2.6 新增一次调用（编辑器「插入节点」）：形态按 jmap 签名选，
+//     函数不在 Import 表里时会自动补条目（接口类资产会按 UE 约定合成模板）
+var call = ws.CreateCall("KardsClearLaunchNotification", []);
+var callOnThis = ws.CreateCall("ClearCardTexts", []);   // 非静态 → EX_Context + this
+
 // 3. 描述逻辑
 var nodes = new List<KNode>
 {

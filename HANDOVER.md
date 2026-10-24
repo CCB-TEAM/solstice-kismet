@@ -238,6 +238,29 @@ dotnet tools\KismetCoverage\bin\Debug\net10.0\KismetCoverage.dll <资产目录> 
 实测 `函数 8115，成功 8115，失败 0`。这个模式是门面代码唯一的实测入口——
 CI 机器上没有资产，自检跑不到它。
 
+### 插入调用验证 `--insert`
+
+```powershell
+KismetCoverage.dll <资产目录> <usmap> --insert <函数名> --catalog <functions.json> [--max N]
+```
+
+对每个资产取**最小的函数**，走一遍编辑器的完整链路：
+`Decompile → CreateCall（按 jmap 签名选形态）→ Generate 写回 → Save → 重新打开 → Decompile 确认新调用在`。
+
+实测（`Logic` 24 个有函数的资产）：
+静态零参 `KardsClearLaunchNotification` **24/24**；非静态 `ClearCardTexts`（走 `EX_Context`）**24/24**。
+
+它暴露过两个真问题，都已修：
+
+1. **新建 Context 调用没有 `RValuePointer`**：编译器原本直接抛异常。
+   现在用**空 `FFieldPath`**（0 段路径 + owner 0）——UE 对无返回值调用的写法。
+   注意 `XFER_PROP_POINTER` 的写入要求 `New` 非空，用 `Old` 形态必 NRE。
+2. **接口类资产没有可克隆的 Import 模板**（`I_*` 资产里一条 `Function` 导入都没有）。
+   `ImportIndex.FindTemplate` 现在会按 UE 固定约定合成（`ClassPackage = /Script/CoreUObject`）。
+
+⚠️ 新建调用里 `ContextKind` 固定为 `Normal`、`InnerShape` 固定为 `Final`，
+空 `RValuePointer` 只验证过**字节可读回**，没有在 UE 运行时验证过。
+
 用它测出的真实口径（2026-10）：
 
 | 目录 | 资产 | 函数 | 结果 |
