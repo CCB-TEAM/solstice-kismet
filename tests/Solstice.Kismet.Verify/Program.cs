@@ -340,5 +340,35 @@ var options = new DecompileOptions(Measure, ResolveImport);
         rebuilt[0] is EX_Return { ReturnExpression: EX_SoftObjectConst { Value: EX_StringConst } });
 }
 
+// ---- 12. 底部测条件的循环（UE 的 for 形态）----
+// [0]IntConst@0 [1]IntConst@5 [2]JumpIfNot->25@10 [3]IntConst@15 [4]Jump->0@20 [5]Return@25
+// 断言：折叠成 BottomLoopNode（体 2 条、尾 1 条），且回跳补回循环体开头（0），
+// 而不是补到条件处——这正是之前 183 个退化里的主因之一。
+{
+    var exprs = new KismetExpression[]
+    {
+        new EX_IntConst { Value = 1 },
+        new EX_IntConst { Value = 2 },
+        new EX_JumpIfNot { CodeOffset = 25, BooleanExpression = new EX_True() },
+        new EX_IntConst { Value = 3 },
+        new EX_Jump { CodeOffset = 0 },
+        new EX_Return { ReturnExpression = new EX_Nothing() },
+        new EX_EndOfScript()
+    };
+
+    var nodes = KismetDecompiler.Decompile(exprs, options);
+    Check("底部循环: 折叠成 BottomLoopNode", nodes[0] is BottomLoopNode, nodes[0].GetType().Name);
+    Check("底部循环: 体 2 条 / 尾 1 条",
+        nodes[0] is BottomLoopNode { Body.Count: 2, Tail.Count: 1 },
+        nodes[0] is BottomLoopNode bl ? $"{bl.Body.Count}/{bl.Tail.Count}" : "-");
+
+    // 补丁只在有 Measure 时才会回填——不给 Measure，所有偏移会保持 0，测不出问题
+    var rebuilt = KismetCompiler.CompileToExpressions(nodes, new CompileContext(Measure: Measure));
+    Check("底部循环: 回跳补回体开头", rebuilt[4] is EX_Jump { CodeOffset: 0 },
+        $"{((rebuilt[4] as EX_Jump)?.CodeOffset)}");
+    Check("底部循环: 条件落点不变", rebuilt[2] is EX_JumpIfNot { CodeOffset: 25 },
+        $"{((rebuilt[2] as EX_JumpIfNot)?.CodeOffset)}");
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;
