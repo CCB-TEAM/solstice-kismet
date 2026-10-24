@@ -349,12 +349,14 @@ public static class KismetDecompiler
     /// </summary>
     /// <param name="originalBytes">原始字节码序列化后的字节，用作比对基准。</param>
     /// <param name="recompile">把节点列表重新编译成字节，由调用方提供（需要资产上下文）。</param>
+    /// <param name="onFallback">结构化尝试全部失败、即将退回扁平模式时回调（调用方据此告知用户「这次是退化的」）。</param>
     public static IReadOnlyList<KNode> DecompileVerified(
         IReadOnlyList<KismetExpression> expressions,
         byte[] originalBytes,
         DecompileOptions? options,
         Func<IReadOnlyList<KNode>, byte[]> recompile,
-        uint baseOffset = 0)
+        uint baseOffset = 0,
+        Action? onFallback = null)
     {
         options ??= new DecompileOptions();
 
@@ -388,6 +390,7 @@ public static class KismetDecompiler
             }
 
             options.Warn?.Invoke("所有结构化尝试均不符，退回扁平模式");
+            onFallback?.Invoke();
         }
 
         return Decompile(expressions, options with { Flatten = true }, baseOffset);

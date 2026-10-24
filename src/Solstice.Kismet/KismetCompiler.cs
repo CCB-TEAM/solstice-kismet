@@ -460,16 +460,17 @@ public static class KismetCompiler
                 case CallArg c:
                 {
                     var inner = c.Args.Select(ToExpr).ToArray();
-                    var stack = StackOf(c.Callee);
 
                     // 外层要不要包 EX_Context，由 Shape 决定；
                     // 内层用哪个指令，由 InnerShape 决定（两者是独立的语义）。
                     var effective = c.Shape == CallShape.Context ? c.InnerShape : c.Shape;
 
+                    // StackNode 只在需要它的形态里取：Virtual/VirtualGlobal 存的是 FName，没有 StackNode。
+                    // 提前取会让「名字不在 Import 表里」的虚调用白白报错（反编译出来的虚调用就是这种）。
                     KismetExpression call = effective switch
                     {
-                        CallShape.Math => new EX_CallMath { StackNode = stack, Parameters = inner },
-                        CallShape.LocalFinal => new EX_LocalFinalFunction { StackNode = stack, Parameters = inner },
+                        CallShape.Math => new EX_CallMath { StackNode = StackOf(c.Callee), Parameters = inner },
+                        CallShape.LocalFinal => new EX_LocalFinalFunction { StackNode = StackOf(c.Callee), Parameters = inner },
                         CallShape.Virtual when resolveName is not null => new EX_LocalVirtualFunction
                         {
                             VirtualFunctionName = resolveName(c.Function),
@@ -482,11 +483,11 @@ public static class KismetCompiler
                         },
                         CallShape.MulticastDelegate => new EX_CallMulticastDelegate
                         {
-                            StackNode = stack,
+                            StackNode = StackOf(c.Callee),
                             Parameters = inner,
                             Delegate = c.Delegate is { } dg ? ToExpr(dg) : new EX_Nothing()
                         },
-                        _ => new EX_FinalFunction { StackNode = stack, Parameters = inner }
+                        _ => new EX_FinalFunction { StackNode = StackOf(c.Callee), Parameters = inner }
                     };
 
                     if (c.Shape != CallShape.Context)
@@ -576,8 +577,10 @@ public static class KismetCompiler
 
                     // ContextExpression 的形态由 InnerShape 决定，不一定都是 FinalFunction。
                     // StackNode 必须用反编译保留的那个：同名导入可能有多个，按名字查会取错索引。
+                    // 但 Virtual 形态存的是 FName、没有 StackNode——这时不能去查 Import 表，
+                    // 否则「名字不在 Import 表里」的虚调用会直接抛错（ubergraph 里的
+                    // ObjectConst.Xxx 就是这种），整段结构化还原会退化成扁平。
                     var ctxArgs = BuildArgs(new CallNode(cc.Function, cc.Args));
-                    var ctxStack = StackOf(cc.Callee);
 
                     KismetExpression inner = cc.InnerShape switch
                     {
@@ -586,9 +589,9 @@ public static class KismetCompiler
                             VirtualFunctionName = resolveName(cc.Function),
                             Parameters = ctxArgs
                         },
-                        CallShape.Math => new EX_CallMath { StackNode = ctxStack, Parameters = ctxArgs },
-                        CallShape.LocalFinal => new EX_LocalFinalFunction { StackNode = ctxStack, Parameters = ctxArgs },
-                        _ => new EX_FinalFunction { StackNode = ctxStack, Parameters = ctxArgs }
+                        CallShape.Math => new EX_CallMath { StackNode = StackOf(cc.Callee), Parameters = ctxArgs },
+                        CallShape.LocalFinal => new EX_LocalFinalFunction { StackNode = StackOf(cc.Callee), Parameters = ctxArgs },
+                        _ => new EX_FinalFunction { StackNode = StackOf(cc.Callee), Parameters = ctxArgs }
                     };
 
                     result.Add(MakeContext(

@@ -32,18 +32,29 @@
   #3 [45..] off=1267  结束=FallsThrough
 ```
 
-## 二、最关键的边界：入口表不在字节码里
+## 二、最关键的边界：入口表不在字节码里，而在**调用点**里
 
-入口段起始偏移那张表（事件序号 → 字节偏移）**不在函数的字节码里**，
-它由编辑器烘焙时写进 `UClass` 的事件引用。所以：
+入口偏移**不在** ubergraph 自己的字节码里——这一点是对的。但它也**不在 `UClass` 的事件引用里**
+（本机实测 UE 5.6：`FunctionExport` 尾部那 8 字节 `EventGraphFunction` + `EventGraphCallOffset`
+在全部函数上都是 0）。它被烘进了**调用点**：每个事件存根都是
 
-- 反编译只能靠**跳转目标**推出基本块（leader 算法），**推不出入口编号**。
-  段数只是下界；真正有几个事件，字节码不告诉你。
-- 因此「反编译时展开 → 编译时按 Flag 打回」是唯一诚实的路径：
-  Flag 承载的就是这份字节码里没有的信息。
+```
+LocalFinal ExecuteUbergraph_BP_Chat(726)      ← 726 就是入口偏移（EX_IntConst）
+```
 
-实测佐证：`BP_Chat` 里没有任何函数调用 `ExecuteUbergraph_BP_Chat` 并传常量偏移——
-入口是从类的事件系统外部进来的。
+所以：
+
+- 反编译只能靠**跳转目标**推出基本块（leader 算法），**推不出入口编号**——段数只是下界；
+  一个段可以有多个入口（事件从段中间进入），段起始偏移 ≠ 入口表。
+- 想拿到真正的入口表，扫全资产找「调用该 ubergraph 且首参是 `EX_IntConst`」的调用点，
+  见 `KismetWorkspace.UbergraphCallSites()`。
+- 改 ubergraph 时唯一的硬约束：**这些常量指向的偏移必须仍然落在同一条指令上**。
+  往段尾追加（工具支持的唯一改法）不会移动任何入口；改段内布局会整体错位，
+  `KismetWorkspace` 会回滚编辑并拒绝写盘（`CheckUbergraphEntryPoints` / `VerifyEditedUbergraphs`）。
+
+实测佐证（`BP_Chat`）：4 个段（10 / 83 / 648 / 1267），但有 6 个入口点
+（`StartNUIChat`@107、`CloseChat`@721、`MinimizeChat`@726、`Completed_142D…`@731、
+`Completed_E1C5…`@938、`ReceiveMessage`@1295）。
 
 ## 三、反编译侧（已实现）
 
@@ -119,17 +130,21 @@ public sealed record UberGraphFlags(
     bool EpilogueReturns = true);  // 尾声是 Return（实测 12/12 都是）
 ```
 
-按 `Entries` 顺序烘段时偏移会变，必须把新的入口偏移写回 `UClass` 的事件引用，
+按 `Entries` 顺序烘段时偏移会变，必须让**调用点**里那些 `EX_IntConst` 跟着改，
 否则运行时 `ComputedJump` 会跳到错误位置。段内容与顺序不变时，结果应与原始字节完全相同。
 
-实际的 API 是 `KismetCompiler.BakeUbergraph`——它直接**返回**需要写回的那张表：
+实际的 API 是 `KismetCompiler.BakeUbergraph`——它直接**返回**重新烘焙的结果：
 
 ```csharp
 var baked = KismetCompiler.BakeUbergraph(nodes, context);
 // baked.Expressions    重新烘焙出的表达式
-// baked.EntryOffsets   段顺序的入口偏移（写回 UClass 的就是这个）
+// baked.EntryOffsets   段顺序的段起始偏移（注意：这是**段**的起始，不是入口表）
 // baked.EpilogueOffset 尾声偏移
 ```
+
+真正的入口表用 `KismetWorkspace.UbergraphCallSites(name)` 从调用点扫出来；
+两者本就可以不相等（一个段可以有多个入口）。写盘前用
+`CheckUbergraphEntryPoints` / `VerifyEditedUbergraphs` 校验入口点没被移动。
 
 验证：12/12 ubergraph 在内容不变时，`EntryOffsets` 与原始段起始偏移**逐项相等**，
 且字节逐字节一致。这条由自检锁住（`ubergraph 烘焙: 入口表与原表一致`）。

@@ -23,6 +23,9 @@ public sealed class KismetWorkspace
     private readonly UAsset _asset;
     private readonly Usmap _usmap;
 
+    /// <summary>函数名 → 首次编辑前的字节码快照。ubergraph 的入口点校验要靠它当基准。</summary>
+    private readonly Dictionary<string, KismetExpression[]> _originalBytecode = new(StringComparer.Ordinal);
+
     private KismetWorkspace(UAsset asset, Usmap usmap)
     {
         _asset = asset;
@@ -677,10 +680,14 @@ public sealed class KismetWorkspace
         FunctionRef callee,
         params KArg[] args)
     {
+        var returnType = ResultTypeOf(callee)
+                         ?? throw new InvalidOperationException(
+                             $"{callee.FullPath} 没有返回值，不能用 withResult——直接用 insert_call 即可");
+
         var existing = new HashSet<string>(Variables(functionName), StringComparer.Ordinal);
 
         // UE 的命名：CallFunc_<函数>_<返回引脚名>；重复时从 _1 开始（实测 ..._ReturnValue、_1、_2、_3）
-        var pinName = ResultTypeOf(callee)?.Name;
+        var pinName = returnType.Name;
         var baseName = $"CallFunc_{callee.Name}_{(string.IsNullOrEmpty(pinName) ? "ReturnValue" : pinName)}";
         var name = baseName;
         var suffix = 1;
@@ -690,8 +697,11 @@ public sealed class KismetWorkspace
             name = $"{baseName}_{suffix++}";
         }
 
+        // 先声明再赋值：只造指针、不往属性表里加条目，运行时解析不到这个变量
+        var declaration = DeclareLocalVariable(functionName, name, returnType.Type);
+
         var result = AssignCallResult(functionName, callee, name, args);
-        return new InsertedCall(name, ResultTypeOf(callee), result.Opcodes, result.Hex, result.Bytes);
+        return new InsertedCall(name, returnType, result.Opcodes, result.Hex, result.Bytes, declaration);
     }
 
     /// <summary>插入调用后得到的临时变量：名字 + **它的类型**（= 被调函数的返回参数）+ 编译结果。</summary>
@@ -700,7 +710,8 @@ public sealed class KismetWorkspace
         FunctionParam? ReturnType,
         IReadOnlyList<string> Opcodes,
         string Hex,
-        int Bytes);
+        int Bytes,
+        string? Declaration = null);
 
     /// <summary>
     /// 调用的返回类型。临时变量的类型就是它，不需要读资产的局部变量表。
@@ -825,19 +836,37 @@ public sealed class KismetWorkspace
     /// </para>
     /// </summary>
     public IReadOnlyList<KNode> Decompile(string functionName)
+        => DecompileDetailed(functionName).Nodes;
+
+    /// <summary>反编译结果 + 它到底是哪种表示（是否退化成扁平）。</summary>
+    public sealed record DecompileResult(IReadOnlyList<KNode> Nodes, bool Structured);
+
+    /// <summary>
+    /// 同 <see cref="Decompile"/>，但额外告诉调用方「结构化还原是否成功」。
+    ///
+    /// <para>
+    /// 退化本身不是错误（字节仍然一致），但**必须让调用方知道**：
+    /// 拿到扁平指令流的 agent 会把 `&lt;JumpIfNot&gt;` 当成普通节点，改出来的东西不是它想要的。
+    /// </para>
+    /// </summary>
+    public DecompileResult DecompileDetailed(string functionName)
     {
         var fn = FindFunction(functionName)
                  ?? throw new InvalidOperationException($"找不到函数: {functionName}");
 
         var bytecode = fn.ScriptBytecode!;
+        var fellBack = false;
         var options = new DecompileOptions(
             Measure: e => e.GetSize(_asset),
             ResolveImport: idx => Names.TryGetValue(idx?.Index ?? 0, out var n) ? n : null);
 
         var original = SerializeBytecode(bytecode);
-        return KismetDecompiler.DecompileVerified(
+        var nodes = KismetDecompiler.DecompileVerified(
             bytecode, original, options,
-            ns => SerializeBytecode(KismetCompiler.CompileToExpressions(ns, ContextOf(fn))));
+            ns => SerializeBytecode(KismetCompiler.CompileToExpressions(ns, ContextOf(fn))),
+            onFallback: () => fellBack = true);
+
+        return new DecompileResult(nodes, !fellBack);
     }
 
     /// <summary>
@@ -850,6 +879,546 @@ public sealed class KismetWorkspace
                  ?? throw new InvalidOperationException($"找不到函数: {functionName}");
 
         return KismetCompiler.BakeUbergraph(Decompile(functionName), ContextOf(fn));
+    }
+
+    // ---------------- ubergraph 入口点 ----------------
+    //
+    // 入口偏移**不在** ubergraph 自己的字节码里，也不在 UClass 上（本机实测 UE5.6 里
+    // FunctionExport 尾部的 EventGraphFunction/EventGraphCallOffset 全是 0）——
+    // 它被烘进了**调用点**：每个事件存根都是
+    //     LocalFinal ExecuteUbergraph_X(<EX_IntConst 入口偏移>)
+    // 所以「插入调用会不会写坏资产」的判据只有一条：
+    //     这些常量指向的那条指令，改动后还在不在原位。
+    // 段内字节一变、这些偏移就整体错位，UE 的 ComputedJump 会跳到指令中间。
+
+    /// <summary>一个 ubergraph 入口点：哪个函数调用它、传进去的偏移是多少。</summary>
+    public sealed record UbergraphEntrySite(string CallerFunction, int Offset);
+
+    /// <summary>入口点在编辑后是否仍然落在同一条指令上。</summary>
+    public sealed record UbergraphEntryCheck(
+        string CallerFunction,
+        int Offset,
+        bool Ok,
+        string Before,
+        string After);
+
+    /// <summary>扫描全资产，找出所有「调用 <paramref name="ubergraphName"/> 并传常量偏移」的调用点。</summary>
+    public IReadOnlyList<UbergraphEntrySite> UbergraphCallSites(string ubergraphName)
+    {
+        var sites = new List<UbergraphEntrySite>();
+
+        foreach (var fn in _asset.Exports.OfType<FunctionExport>())
+        {
+            if (fn.ScriptBytecode is not { Length: > 0 } bytecode)
+            {
+                continue;
+            }
+
+            foreach (var expression in bytecode)
+            {
+                var (stack, parameters) = expression switch
+                {
+                    EX_LocalFinalFunction lf => (lf.StackNode, lf.Parameters),
+                    EX_FinalFunction ff => (ff.StackNode, ff.Parameters),
+                    _ => (null, null)
+                };
+
+                if (stack is null || parameters is not { Length: > 0 })
+                {
+                    continue;
+                }
+
+                if (!Names.TryGetValue(stack.Index, out var callee) || callee != ubergraphName)
+                {
+                    continue;
+                }
+
+                if (parameters[0] is EX_IntConst constant)
+                {
+                    sites.Add(new UbergraphEntrySite(fn.ObjectName.ToString(), constant.Value));
+                }
+            }
+        }
+
+        return sites;
+    }
+
+    /// <summary>
+    /// 校验 ubergraph 的所有入口点：编辑后每个偏移是否还落在**同一条指令**上。
+    ///
+    /// <para>
+    /// 比对基准是打开资产时的原始字节码（首次编辑前抓的快照），因为调用点里的常量
+    /// 就是按原始布局写的。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<UbergraphEntryCheck> CheckUbergraphEntryPoints(string ubergraphName)
+    {
+        var fn = FindFunction(ubergraphName)
+                 ?? throw new InvalidOperationException($"找不到函数: {ubergraphName}");
+
+        var before = _originalBytecode.TryGetValue(ubergraphName, out var snapshot)
+            ? snapshot
+            : fn.ScriptBytecode ?? [];
+        var after = fn.ScriptBytecode ?? [];
+
+        var oldMap = InstructionMap(before);
+        var newMap = InstructionMap(after);
+
+        return UbergraphCallSites(ubergraphName)
+            .Select(site =>
+            {
+                var oldOp = oldMap.TryGetValue(site.Offset, out var o) ? o : "<无>";
+                var newOp = newMap.TryGetValue(site.Offset, out var n) ? n : "<无>";
+                return new UbergraphEntryCheck(
+                    site.CallerFunction, site.Offset, oldOp == newOp && oldOp != "<无>", oldOp, newOp);
+            })
+            .ToArray();
+    }
+
+    /// <summary>所有「改过且是 ubergraph」的函数的入口点校验；有失效的直接抛异常（写盘前最后一道闸）。</summary>
+    public IReadOnlyList<UbergraphEntryCheck> VerifyEditedUbergraphs()
+    {
+        var all = new List<UbergraphEntryCheck>();
+
+        foreach (var name in _originalBytecode.Keys.Where(
+                     n => n.StartsWith("ExecuteUbergraph_", StringComparison.Ordinal)))
+        {
+            var checks = CheckUbergraphEntryPoints(name);
+            var broken = checks.Where(c => !c.Ok).ToArray();
+            if (broken.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"{name} 的入口点已失效，拒绝写盘（会跳进指令中间）：\n" +
+                    string.Join("\n", broken.Select(b =>
+                        $"  {b.CallerFunction} 传的偏移 {b.Offset}：改动前 {b.Before} → 改动后 {b.After}")));
+            }
+
+            all.AddRange(checks);
+        }
+
+        return all;
+    }
+
+    /// <summary>指令起始偏移 → 指令名。</summary>
+    private Dictionary<int, string> InstructionMap(IReadOnlyList<KismetExpression> expressions)
+    {
+        var map = new Dictionary<int, string>();
+        var offset = 0;
+        foreach (var expression in expressions)
+        {
+            map[offset] = expression.Inst;
+            offset += (int)expression.GetSize(_asset);
+        }
+
+        return map;
+    }
+
+    // ---------------- 参数赋值 ----------------
+
+    /// <summary>参数值的种类（transport 无关；MCP 侧把 JSON 转成它）。</summary>
+    public enum ArgKind
+    {
+        Int,
+        Long,
+        Float,
+        Double,
+        Bool,
+        Byte,
+        String,
+        Name,
+        Variable,
+        None,
+        Self,
+        Call
+    }
+
+    /// <summary>一个具体的参数值。</summary>
+    public sealed record ArgValue(
+        ArgKind Kind,
+        string? Text = null,
+        long? Integer = null,
+        double? Number = null,
+        bool? Flag = null,
+        string? Callee = null,
+        string? CalleeOwner = null);
+
+    /// <summary>「给哪个参数赋什么值」：<see cref="Param"/> 为空时按位置取第一个还没填的参数。</summary>
+    public sealed record ArgSpec(string? Param, ArgValue Value);
+
+    /// <summary>
+    /// 按签名生成**完整**参数表：<paramref name="overrides"/> 里给到的用给的值，其余用占位默认值。
+    ///
+    /// <para>
+    /// 类型不对会直接报错，不会「凑合着编码」——参数类型错了，字节看着对、运行时行为全错。
+    /// 目前支持标量（int / int64 / float / double / bool / byte / str / name）、
+    /// 变量引用、嵌套调用、空对象；text / struct / array / map / set 仍只支持占位。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<KArg> BuildArgs(
+        string functionName,
+        FunctionRef callee,
+        IReadOnlyList<ArgSpec> overrides)
+    {
+        var signature = callee.Signature ?? Catalog?.Find(callee.OwnerPath, callee.Name);
+
+        // 没有签名（比如本资产自己的蓝图函数，jmap 里只有 /Script）：
+        // 只接受**显式给值**，绝不猜默认参数——猜出来的调用形态是错的。
+        if (signature is null)
+        {
+            if (overrides.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"没有 {callee.FullPath} 的签名（jmap 只覆盖 /Script）——" +
+                    "调用本资产的蓝图函数必须用 args 显式给出全部参数");
+            }
+
+            return overrides.Select(o => MakeArg(functionName, null, o.Value)).ToArray();
+        }
+
+        var inputs = signature.Inputs;
+        var slots = new KArg?[inputs.Count];
+
+        foreach (var spec in overrides)
+        {
+            var index = -1;
+            if (!string.IsNullOrEmpty(spec.Param))
+            {
+                index = -1;
+                for (var i = 0; i < inputs.Count; i++)
+                {
+                    if (string.Equals(inputs[i].Name, spec.Param, StringComparison.Ordinal))
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+
+                if (index < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"{callee.Name} 没有名为 {spec.Param} 的输入参数；可选：{string.Join(", ", inputs.Select(p => p.Name))}");
+                }
+            }
+            else
+            {
+                for (var i = 0; i < slots.Length; i++)
+                {
+                    if (slots[i] is null)
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+
+                if (index < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"{callee.Name} 只有 {inputs.Count} 个输入参数，收到 {overrides.Count} 个值");
+                }
+            }
+
+            if (slots[index] is not null)
+            {
+                throw new InvalidOperationException($"{callee.Name} 的参数 {inputs[index].Name} 被赋了两次值");
+            }
+
+            slots[index] = MakeArg(functionName, inputs[index], spec.Value);
+        }
+
+        for (var i = 0; i < slots.Length; i++)
+        {
+            slots[i] ??= MakeDefault(inputs[i]).Value;
+        }
+
+        return slots.Select(s => s!).ToArray();
+    }
+
+    private KArg MakeArg(string functionName, FunctionParam? param, ArgValue value)
+    {
+        if (value.Kind == ArgKind.Variable)
+        {
+            return ResolveVariableArg(functionName, Require(value.Text, "variable", param));
+        }
+
+        if (value.Kind == ArgKind.Call)
+        {
+            var callee = ResolveFunction(Require(value.Callee, "call", param), value.CalleeOwner)
+                         ?? throw new InvalidOperationException($"找不到函数 {value.Callee}");
+            return CreateCallArg(callee, BuildArgs(functionName, callee, []));
+        }
+
+        // 没有签名时只按 kind 构造，不做类型校验（调用方显式负责）
+        if (param is null)
+        {
+            return value.Kind switch
+            {
+                ArgKind.Int => new IntArg((int)(value.Integer ?? 0)),
+                ArgKind.Long => new LongArg(value.Integer ?? 0),
+                ArgKind.Float => new FloatArg((float)(value.Number ?? 0)),
+                ArgKind.Double => new DoubleArg(value.Number ?? 0),
+                ArgKind.Bool => new BoolArg(value.Flag ?? false),
+                ArgKind.Byte => new ByteArg((byte)(value.Integer ?? 0)),
+                ArgKind.String => new StringArg(value.Text ?? ""),
+                ArgKind.Name => new NameArg(new FName(_asset, string.IsNullOrEmpty(value.Text) ? "None" : value.Text)),
+                ArgKind.None => new NoObjectArg(),
+                ArgKind.Self => new SelfArg(),
+                _ => throw new InvalidOperationException($"不支持的参数种类 {value.Kind}")
+            };
+        }
+
+        static InvalidOperationException Mismatch(FunctionParam p, ArgValue v) => new(
+            $"参数 {p.Name} 的类型是 {p.Type}，给的是 {v.Kind}——类型不匹配，不猜");
+
+        return param.Type switch
+        {
+            "IntProperty" => value.Kind switch
+            {
+                ArgKind.Int => new IntArg((int)(value.Integer ?? 0)),
+                ArgKind.Byte => new IntArg((byte)(value.Integer ?? 0)),
+                ArgKind.Bool => new IntArg(value.Flag == true ? 1 : 0),
+                _ => throw Mismatch(param, value)
+            },
+            "Int64Property" => value.Kind is ArgKind.Long or ArgKind.Int
+                ? new LongArg(value.Integer ?? 0)
+                : throw Mismatch(param, value),
+            "FloatProperty" => value.Kind switch
+            {
+                ArgKind.Float => new FloatArg((float)(value.Number ?? 0)),
+                ArgKind.Double => new FloatArg((float)(value.Number ?? 0)),
+                ArgKind.Int => new FloatArg(value.Integer ?? 0),
+                _ => throw Mismatch(param, value)
+            },
+            "DoubleProperty" => value.Kind switch
+            {
+                ArgKind.Double => new DoubleArg(value.Number ?? 0),
+                ArgKind.Float => new DoubleArg(value.Number ?? 0),
+                ArgKind.Int => new DoubleArg(value.Integer ?? 0),
+                _ => throw Mismatch(param, value)
+            },
+            "BoolProperty" => value.Kind == ArgKind.Bool
+                ? new BoolArg(value.Flag ?? false)
+                : throw Mismatch(param, value),
+            "ByteProperty" or "EnumProperty" => value.Kind is ArgKind.Byte or ArgKind.Int
+                ? new ByteArg((byte)(value.Integer ?? 0))
+                : throw Mismatch(param, value),
+            "StrProperty" => value.Kind == ArgKind.String
+                ? new StringArg(value.Text ?? "")
+                : throw Mismatch(param, value),
+            // FName 的空值是 None，空字符串进不了名字表
+            "NameProperty" => value.Kind == ArgKind.Name
+                ? new NameArg(new FName(_asset, string.IsNullOrEmpty(value.Text) ? "None" : value.Text))
+                : throw Mismatch(param, value),
+            "ObjectProperty" or "ClassProperty" or "SoftObjectProperty" or "DelegateProperty" =>
+                value.Kind switch
+                {
+                    ArgKind.None => new NoObjectArg(),
+                    ArgKind.Self => new SelfArg(),
+                    _ => throw Mismatch(param, value)
+                },
+            _ => throw new InvalidOperationException(
+                $"参数 {param.Name} 的类型 {param.Type} 暂不支持赋值（text / struct / array / map / set 需要真实载荷）——" +
+                "先用占位，或改用参数类型简单的函数")
+        };
+    }
+
+    private static string Require(string? text, string what, FunctionParam? param) =>
+        string.IsNullOrWhiteSpace(text)
+            ? throw new InvalidOperationException(
+                $"{(param is null ? "参数" : "参数 " + param.Name)} 的 {what} 值不能为空")
+            : text;
+
+    /// <summary>变量引用：已在字节码里出现过就复用原指针；否则看是不是类上的成员变量。</summary>
+    private KArg ResolveVariableArg(string functionName, string name)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        var existing = ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!);
+        if (existing.ContainsKey(name))
+        {
+            return EnsureVariable(functionName, name, instance: false);
+        }
+
+        var classExport = _asset.Exports.OfType<ClassExport>().FirstOrDefault();
+        var isMember = classExport?.LoadedProperties?.Any(p => p.Name.ToString() == name) == true;
+        if (!isMember)
+        {
+            throw new InvalidOperationException(
+                $"{functionName} 里没有变量 {name}（局部变量只认已出现在字节码里的；成员变量要在类上）");
+        }
+
+        return EnsureVariable(functionName, name, instance: true);
+    }
+
+    // ---------------- 局部变量声明 ----------------
+
+    /// <summary>
+    /// 把 <paramref name="variableName"/> 真正声明成函数的局部变量（往属性表里加一条 FProperty）。
+    ///
+    /// <para>
+    /// 只造 <c>FFieldPath</c> 指针是不够的：运行时是按指针去函数的属性表里解析的，
+    /// 表里没有这一条就解析不到。模板从资产里**同类型的现有属性**克隆——
+    /// 不猜 <c>ElementSize</c> / <c>PropertyFlags</c> 这些字段。
+    /// </para>
+    ///
+    /// <para>返回 null 表示成功；否则返回不能声明的原因（调用方决定是报错还是只警告）。</para>
+    /// </summary>
+    public string? DeclareLocalVariable(string functionName, string variableName, string? propertyType)
+    {
+        var fn = FindFunction(functionName)
+                 ?? throw new InvalidOperationException($"找不到函数: {functionName}");
+
+        var properties = fn.LoadedProperties ?? [];
+        if (properties.Any(p => p.Name.ToString() == variableName))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(propertyType))
+        {
+            return $"不知道 {variableName} 的类型（被调函数没有返回值签名）";
+        }
+
+        // 结构体 / 容器 / 对象：模板的 Struct / PropertyClass / Inner 可能是别的类型，克隆出来就是错的
+        if (propertyType is "StructProperty" or "ArrayProperty" or "MapProperty" or "SetProperty")
+        {
+            return $"{propertyType} 的临时变量需要正确的结构/容器类型，jmap 里拿不到，不自动声明";
+        }
+
+        if (propertyType is "ObjectProperty" or "ClassProperty" or "SoftObjectProperty")
+        {
+            return $"{propertyType} 的临时变量需要正确的 PropertyClass，不自动声明";
+        }
+
+        var template = FindPropertyTemplate(fn, propertyType);
+        if (template is null)
+        {
+            return $"资产里没有 {propertyType} 类型的属性可作模板";
+        }
+
+        var clone = CloneProperty(template);
+        clone.Name = new FName(_asset, variableName);
+        fn.LoadedProperties = [.. properties, clone];
+        return null;
+    }
+
+    /// <summary>找一个同类型的属性当模板：优先本函数，其次全资产。</summary>
+    private UAssetAPI.FieldTypes.FProperty? FindPropertyTemplate(FunctionExport fn, string propertyType)
+    {
+        static bool Matches(UAssetAPI.FieldTypes.FProperty p, string type)
+            => string.Equals(p.SerializedType?.Value?.Value, type, StringComparison.Ordinal);
+
+        var local = fn.LoadedProperties?.FirstOrDefault(p => Matches(p, propertyType));
+        if (local is not null)
+        {
+            return local;
+        }
+
+        foreach (var export in _asset.Exports.OfType<StructExport>())
+        {
+            var found = export.LoadedProperties?.FirstOrDefault(p => Matches(p, propertyType));
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>浅拷贝一个属性（只换名字；Write 只读字段，不共享可变状态）。</summary>
+    private static UAssetAPI.FieldTypes.FProperty CloneProperty(UAssetAPI.FieldTypes.FProperty source)
+    {
+        var method = typeof(object).GetMethod(
+            "MemberwiseClone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("拿不到 MemberwiseClone");
+        return (UAssetAPI.FieldTypes.FProperty)method.Invoke(source, null)!;
+    }
+
+    // ---------------- 节点级编辑 ----------------
+
+    /// <summary>删掉路径指向的节点。</summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) DeleteNode(string functionName, string path)
+    {
+        var target = NodePaths.Find(Decompile(functionName), path);
+        if (target is ReturnNode)
+        {
+            throw new InvalidOperationException("不能删 Return——函数的字节码必须以 Return 结束");
+        }
+
+        return Edit(functionName, nodes => NodePaths.Delete(nodes, path));
+    }
+
+    /// <summary>在路径指向的节点**之前**插入一次调用（不写 <paramref name="before"/> 就是末尾追加）。</summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) InsertCallBefore(
+        string functionName,
+        FunctionRef callee,
+        string before,
+        params KArg[] args)
+    {
+        var call = CreateCall(callee, args.Length > 0 ? args : null);
+        return Edit(functionName, nodes => NodePaths.InsertBefore(nodes, before, call));
+    }
+
+    /// <summary>把路径指向的调用节点换成另一次调用（保留它原来的形态与上下文）。</summary>
+    public (IReadOnlyList<string> Opcodes, string Hex, int Bytes) ReplaceCall(
+        string functionName,
+        string path,
+        FunctionRef callee,
+        params KArg[] args)
+    {
+        var target = NodePaths.Find(Decompile(functionName), path);
+        var replacement = RebuildCall(target, callee, args.Length > 0 ? args : null)
+                          ?? throw new InvalidOperationException(
+                              $"路径 {path} 指向的是 {target.GetType().Name}（{target.Title}），不是调用节点");
+
+        return Edit(functionName, nodes => NodePaths.Replace(nodes, path, replacement));
+    }
+
+    /// <summary>按原节点的形态造一个新调用；不是调用节点返回 null。</summary>
+    private KNode? RebuildCall(KNode node, FunctionRef callee, IReadOnlyList<KArg>? args) => node switch
+    {
+        CallNode c => new CallNode(callee, args ?? c.Args),
+        MathCallNode m => new MathCallNode(callee, args ?? m.Args),
+        LocalFinalCallNode l => new LocalFinalCallNode(callee, args ?? l.Args),
+        VirtualCallNode v => new VirtualCallNode(callee.Name, args ?? v.Args),
+        MulticastCallNode mc => new MulticastCallNode(callee, args ?? mc.Args, mc.Delegate),
+        ContextCallNode cc => new ContextCallNode(
+            cc.ObjectVariable, callee, args ?? cc.Args, cc.ObjectArg, cc.RValuePointer, cc.InnerShape, cc.ContextKind),
+        _ => null
+    };
+
+    // ---------------- 整资产校验 ----------------
+
+    /// <summary>单个函数的校验结论。</summary>
+    public sealed record VerifyEntry(string Function, bool Structured, string? Error);
+
+    /// <summary>
+    /// 逐函数校验：能不能**结构化**还原（= 回编译后逐字节一致）。
+    ///
+    /// <para>
+    /// 退回扁平也是字节一致的，但那只说明「原样搬运」没错——结构化才是「我们真的看懂了这段字节」。
+    /// 所以这里把「扁平」也当成需要关注的结果报出来。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<VerifyEntry> VerifyAll()
+    {
+        var entries = new List<VerifyEntry>();
+
+        foreach (var name in Functions)
+        {
+            try
+            {
+                var result = DecompileDetailed(name);
+                entries.Add(new VerifyEntry(name, result.Structured, null));
+            }
+            catch (Exception ex)
+            {
+                entries.Add(new VerifyEntry(name, false, $"{ex.GetType().Name}: {ex.Message}"));
+            }
+        }
+
+        return entries;
     }
 
     private CompileContext ContextOf(FunctionExport fn) => new(
@@ -969,7 +1538,26 @@ public sealed class KismetWorkspace
 
         if (assign)
         {
+            // 首次编辑前抓快照：ubergraph 的入口点校验要拿原始布局当基准
+            _originalBytecode.TryAdd(functionName, fn.ScriptBytecode ?? []);
+
+            var previous = fn.ScriptBytecode;
             fn.ScriptBytecode = exprs.ToArray();
+
+            // ubergraph 的特殊闸门：入口偏移烘在**调用点**里，改完必须仍然指向同一条指令
+            if (functionName.StartsWith("ExecuteUbergraph_", StringComparison.Ordinal))
+            {
+                var broken = CheckUbergraphEntryPoints(functionName).Where(c => !c.Ok).ToArray();
+                if (broken.Length > 0)
+                {
+                    fn.ScriptBytecode = previous;   // 回滚这次编辑，工作区保持可用
+                    throw new InvalidOperationException(
+                        $"{functionName} 的改动会让入口点错位，已回滚：\n" +
+                        string.Join("\n", broken.Select(b =>
+                            $"  {b.CallerFunction} 传的偏移 {b.Offset}：改动前 {b.Before} → 改动后 {b.After}\n" +
+                            "  （入口偏移烘在调用点的 EX_IntConst 里，只能改段的尾部，不能动段内布局）")));
+                }
+            }
         }
 
         var ms = new MemoryStream();
@@ -996,6 +1584,9 @@ public sealed class KismetWorkspace
     /// </summary>
     public SavedAsset Save(string workDir, string fileName = "out.uasset")
     {
+        // 写盘前最后一道闸：改过的 ubergraph 入口点必须仍然有效
+        VerifyEditedUbergraphs();
+
         var outPath = Path.Combine(workDir, fileName);
         _asset.Write(outPath);
 

@@ -35,6 +35,13 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        // stdio 上的 JSON-RPC 按 UTF-8 走。不显式设置的话，.NET 会沿用**继承来的控制台代码页**
+        // （中文 Windows 是 936），服务端就把中文按 GBK 写出去，客户端按 UTF-8 读回来全是
+        // U+FFFD ——工具描述与返回内容里的中文会整体变成乱码。
+        var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        Console.OutputEncoding = utf8;
+        Console.InputEncoding = utf8;
+
         if (args.Contains("--selftest"))
         {
             return SelfTest(args);
@@ -175,6 +182,12 @@ public static class Program
 
     private static JsonArray ToolDefinitions()
     {
+        static JsonObject Prop(string type, string desc) => new()
+        {
+            ["type"] = type,
+            ["description"] = desc
+        };
+
         static JsonObject Schema(params (string Name, string Type, string Desc, bool Required)[] props)
         {
             var properties = new JsonObject();
@@ -182,11 +195,7 @@ public static class Program
 
             foreach (var (propName, type, desc, isRequired) in props)
             {
-                properties[propName] = new JsonObject
-                {
-                    ["type"] = type,
-                    ["description"] = desc
-                };
+                properties[propName] = Prop(type, desc);
 
                 if (isRequired)
                 {
@@ -235,14 +244,65 @@ public static class Program
                    ("name", "string", "函数短名", true),
                    ("owner", "string", "归属类全路径或短名（可选）", false)));
 
-        Add("kismet_insert_call", "在函数末尾插入一次调用（参数按签名自动生成）；withResult=true 时结果存进自动命名的临时变量",
+        Add("kismet_insert_call", "插入一次调用：可在末尾、也可在指定节点之前；args 可给具体参数值（不给就按签名补占位）；withResult=true 时结果存进自动命名的临时变量",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["asset"] = Prop("string", "uasset 路径"),
+                    ["usmap"] = Prop("string", "usmap 路径"),
+                    ["catalog"] = Prop("string", "jmap functions.json 路径"),
+                    ["function"] = Prop("string", "被修改的函数名"),
+                    ["callee"] = Prop("string", "被调用的函数短名"),
+                    ["owner"] = Prop("string", "被调函数归属类（可选）"),
+                    ["before"] = Prop("string", "插到这个节点路径之前（可选，默认函数末尾；路径见 kismet_decompile 的 #0.2 标注）"),
+                    ["withResult"] = Prop("boolean", "true = 结果存进 CallFunc_<函数>_<引脚> 临时变量"),
+                    ["args"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] = "参数值。每项 {\"param\":\"参数名\",\"kind\":\"int|long|float|double|bool|byte|string|name|variable|none|self|call\",\"value\":...}；param 省略时按位置填；kind=call 时用 function/owner 指定被调函数",
+                        ["items"] = new JsonObject { ["type"] = "object" }
+                    }
+                },
+                ["required"] = new JsonArray("asset", "usmap", "catalog", "function", "callee")
+            });
+
+        Add("kismet_delete_node", "按节点路径删掉一个节点（路径见 kismet_decompile 的 #0.2 标注）",
             Schema(("asset", "string", "uasset 路径", true),
                    ("usmap", "string", "usmap 路径", true),
-                   ("catalog", "string", "jmap functions.json 路径", true),
-                   ("function", "string", "被修改的函数名", true),
-                   ("callee", "string", "被调用的函数短名", true),
-                   ("owner", "string", "被调函数归属类（可选）", false),
-                   ("withResult", "boolean", "true = 结果存进 CallFunc_<函数>_<引脚> 临时变量", false)));
+                   ("function", "string", "函数名", true),
+                   ("path", "string", "节点路径，如 0 或 0.2.1", true)));
+
+        Add("kismet_replace_call", "把某个节点上已有的调用换成另一次调用（保留它原来的形态与上下文）",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["asset"] = Prop("string", "uasset 路径"),
+                    ["usmap"] = Prop("string", "usmap 路径"),
+                    ["catalog"] = Prop("string", "jmap functions.json 路径"),
+                    ["function"] = Prop("string", "函数名"),
+                    ["path"] = Prop("string", "被替换的调用节点路径"),
+                    ["callee"] = Prop("string", "新的被调函数短名"),
+                    ["owner"] = Prop("string", "新被调函数归属类（可选）"),
+                    ["args"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] = "新参数值，格式同 kismet_insert_call",
+                        ["items"] = new JsonObject { ["type"] = "object" }
+                    }
+                },
+                ["required"] = new JsonArray("asset", "usmap", "catalog", "function", "path", "callee")
+            });
+
+        Add("kismet_verify", "逐函数校验：能否结构化还原（= 回编译后逐字节一致），列出退回扁平的函数",
+            Schema(("asset", "string", "uasset 路径", true),
+                   ("usmap", "string", "usmap 路径", true)));
+
+        Add("kismet_reload", "丢弃某个资产的内存状态（未写盘的修改全部丢失，下次调用重新从磁盘打开）",
+            Schema(("asset", "string", "uasset 路径", true)));
 
         Add("kismet_bake_ubergraph", "重新烘焙 ubergraph 并返回入口偏移表（要写回 UClass 的那张表）",
             Schema(("asset", "string", "uasset 路径", true),

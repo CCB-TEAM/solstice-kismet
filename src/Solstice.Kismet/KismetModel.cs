@@ -596,8 +596,9 @@ public sealed record BasicBlockNode(
 ///
 /// <para>
 /// <b>入口表不在字节码里</b>，所以这里记的 <c>StartOffset</c> 只是原布局的偏移。
-/// 重新烘焙时按 <see cref="Sections"/> 的顺序生成、所有跳转目标重算，
-/// 新的入口偏移由调用方写回 UClass 的事件引用。
+/// 重新烘焙时按 <see cref="Sections"/> 的顺序生成、所有跳转目标重算；
+/// 真正的入口偏移烘在**调用点**（<c>LocalFinal ExecuteUbergraph_X(&lt;IntConst&gt;)</c>）里，
+/// 由 <c>KismetWorkspace.UbergraphCallSites</c> 扫出、<c>CheckUbergraphEntryPoints</c> 校验。
 /// </para>
 /// </summary>
 public sealed record UberGraphNode(
@@ -606,13 +607,17 @@ public sealed record UberGraphNode(
     IReadOnlyList<UberSectionNode> Sections)
     : KNode($"UberGraph ({Sections.Count} 段)");
 
-/// <summary>把参数渲染成简短可读文本，只用于节点标题。</summary>
-internal static class ArgRender
+/// <summary>把参数渲染成简短可读文本（节点标题与反编译输出共用）。</summary>
+public static class ArgRender
 {
     public static string Of(KArg? arg) => arg switch
     {
         null => "?",
         IntArg i => i.Value.ToString(),
+        LongArg l => l.Value.ToString(),
+        ByteArg b => b.Value.ToString(),
+        FloatArg f => f.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        DoubleArg d => d.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
         BoolArg b => b.Value ? "true" : "false",
         LocalArg l => l.Name,
         PointerArg p => p.Name,
@@ -621,6 +626,11 @@ internal static class ArgRender
         ObjectArg o => $"<obj {o.Value.Index}>",
         NoObjectArg => "<none>",
         SelfArg => "this",
+        CallArg c => $"{c.Callee.Name}(...)",
         _ => arg.GetType().Name.Replace("Arg", "")
     };
+
+    /// <summary>渲染一串参数：<c>(a, b, c)</c>。</summary>
+    public static string List(IReadOnlyList<KArg> args)
+        => args.Count == 0 ? "()" : "(" + string.Join(", ", args.Select(Of)) + ")";
 }

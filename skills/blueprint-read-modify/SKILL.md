@@ -108,9 +108,23 @@ ws.AttachUsmap(UsmapCatalog.Load(usmapPath));                           // 可�
 dotnet $repo/src/Solstice.Kismet.Mcp/bin/Release/net10.0/Solstice.Kismet.Mcp.dll
 ```
 
-stdio + JSON-RPC 2.0。工具：`kismet_list_functions`、`kismet_decompile`、
-`kismet_resolve_function`、`kismet_plan_call`、`kismet_insert_call`、
-`kismet_bake_ubergraph`、`kismet_struct_members`、`kismet_save`。
+stdio + JSON-RPC 2.0。工具：
+
+| 工具 | 作用 |
+|---|---|
+| `kismet_list_functions` | 列带字节码的函数 |
+| `kismet_decompile` | 反编译成节点树，**每行带节点路径 `#0.2`**，调用节点带参数；退化会明说 |
+| `kismet_resolve_function` | 名字 → 引用（名字 + 归属 + 包索引） |
+| `kismet_plan_call` | 调用的形态与引脚，`??` 标占位 |
+| `kismet_insert_call` | 插入调用：`before=<路径>` 指定位置、`args` 给参数值、`withResult` 存结果 |
+| `kismet_replace_call` | 把某个节点上的调用换成另一次调用 |
+| `kismet_delete_node` | 按路径删节点 |
+| `kismet_bake_ubergraph` | 重烘 ubergraph（报段起始 + 调用点入口表） |
+| `kismet_struct_members` | 查结构体成员 |
+| `kismet_verify` | 逐函数校验能否结构化还原 |
+| `kismet_reload` | 丢弃内存状态（改坏了用） |
+| `kismet_save` | 写盘（uasset + uexp），写前校验 ubergraph 入口点 |
+
 
 MCP 客户端配置：
 
@@ -182,8 +196,15 @@ dotnet $repo/tools/KismetCoverage/bin/Debug/net10.0/KismetCoverage.dll $assets $
 
 输出 `资产 N，成功 N，失败 N`，**失败为 0 才算过**。
 
-需要「结果存进变量」时用库 API：`ws.InsertCallWithResult(function, callee)`，
-变量名按 UE 约定 `CallFunc_<函数>_<返回引脚名>`，重复从 `_1` 起。
+MCP 下更细：`kismet_insert_call` 支持
+
+- `args` —— 给**具体参数值**（`int/long/float/double/bool/byte/string/name/variable/none/self/call`），
+  不给的按签名补占位；类型不匹配直接报错（不凑合编码）
+- `before=<节点路径>` —— 插到指定节点之前（路径见 `kismet_decompile` 的 `#0.2` 标注）
+- `withResult` —— 结果存进 `CallFunc_<函数>_<返回引脚名>`，并**把变量声明写进函数的属性表**
+  （标量类型才会自动声明；结构体/容器/对象会说明原因并跳过）
+
+改已有逻辑用 `kismet_replace_call`（换调用）/ `kismet_delete_node`（删节点），都按节点路径寻址。
 
 ### ④ 显式写回
 
@@ -197,7 +218,7 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 
 1. 重开保存结果：`KismetWorkspace.Open(saved.UAsset, saved.UExp, usmap, dir)` 不抛异常
 2. 反编译目标函数：新调用出现在节点里，参数个数与签名一致
-3. 批量回归：`KismetCoverage <目录> <usmap>` 全绿
+3. 逐函数校验：`kismet_verify`（MCP）或 `KismetCoverage <目录> <usmap>`（批量）
 
 ## 5. 硬规则（违反会静默出错）
 
@@ -215,6 +236,11 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `没有 X 的签名` | catalog 未载入，或用了只含游戏侧的 jmap 查引擎函数 | 载入含引擎类的 `functions.json` |
+| `没有 X 的签名（jmap 只覆盖 /Script）` | 被调的是**本资产的蓝图函数**，jmap 里没有它的签名 | 用 `args` 显式给出全部参数 |
+| `参数 X 的类型是 Y，给的是 Z` | 参数值类型与签名不符 | 换成匹配的 `kind`，或改调用别的函数 |
+| `X 没有名为 Y 的输入参数` | 参数名写错 | 消息里会列出可选参数名 |
+| `路径 0 指向的是 X，不是调用节点` | `replace_call` 指到了非调用节点 | 先 `decompile` 看清路径指向什么 |
+| `改动会让入口点错位，已回滚` | 动了 ubergraph 的段内布局 | 只能在段尾追加（`insert_call` 默认行为） |
 | `X 在 Import 表里有 N 个归属` | 同名函数跨类 | 用 `--class` / `ResolveFunction(name, owner)` |
 | `结构化还原结果与原始字节不符` | 结构还原失败 → 自动退扁平 | 正常退化，字节仍一致，不是 bug |
 | `表达式 XxxConst 暂不支持` | 未覆盖的指令（嵌套位置会抛） | 补 `ToArg` / `ToExpr` 分支 |
@@ -225,7 +251,16 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 ## 7. 边界（别过度承诺）
 
 - **字节可读回**已验证（数千函数逐字节一致）；**UE 运行时行为未验证**——改完的资产没在游戏里跑过
+- **ubergraph 的入口偏移不在资产里，而在调用点**：每个事件存根都是
+  `LocalFinal ExecuteUbergraph_X(<EX_IntConst 入口偏移>)`。所以往段尾追加调用是安全的，
+  动段内布局会让这些常量整体错位（`ComputedJump` 跳进指令中间）。
+  `KismetWorkspace` 会校验并在错位时回滚/拒绝写盘，但**不要绕过它直接改字节码**
 - `StructProperty` 的类型在 jmap 里 `class = null`：只知道"是结构体 + 字节大小"，不知道具体结构
+- **临时变量的声明只覆盖标量**：`withResult` 会给 `CallFunc_*` 补一条 `FProperty`（模板从资产里
+  同类型的现有属性克隆），但结构体 / 容器 / 对象类型只造指针、不声明——克隆模板会把别人的
+  `Struct` / `PropertyClass` / `Inner` 一起搬过来，那比不声明更糟
+- **参数值只覆盖标量 + 变量 + 嵌套调用**：text / struct / array / map / set 仍需占位
+- **节点路径按当前反编译结果编号，不跨编辑稳定**：批量改动要先读完再改
 - **蓝图资产定义的结构（`S_*`）不在 usmap** 里，成员查不到
 - `EX_CallMath` 形态未推断：纯函数也可能被编成 `FinalFunction`
 - 只在 UE 5.6 上实测；更老版本有 `EX_Let` 少一个指针、`KismetPropertyPointer` 用 `Old` 形态等差异

@@ -93,7 +93,9 @@ var saved = ws.Save("/tmp/ws");   // 返回 uasset + uexp 两半，缺一不可
 ## MCP 服务端
 
 `src/Solstice.Kismet.Mcp` 把本库暴露成 MCP 工具（stdio + JSON-RPC 2.0），
-agent 可以直接调 `kismet_decompile` / `kismet_insert_call` / `kismet_bake_ubergraph` 等 8 个工具。
+agent 可以直接调 `kismet_decompile` / `kismet_insert_call` / `kismet_replace_call` /
+`kismet_delete_node` / `kismet_bake_ubergraph` / `kismet_verify` 等 12 个工具：
+反编译带**节点路径**、调用带**参数值**、改完能**逐函数校验**。
 详见 **[docs/mcp.md](docs/mcp.md)**。
 
 ```powershell

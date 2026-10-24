@@ -401,5 +401,49 @@ var options = new DecompileOptions(Measure, ResolveImport);
         $"{((rebuilt[1] as EX_Jump)?.CodeOffset)}");
 }
 
+// ---- 14. 节点路径：删 / 插 / 换，路径必须按 decompile 打印的下标寻址 ----
+{
+    var call1 = new CallNode("A", []);
+    var call2 = new CallNode("B", []);
+    var call3 = new CallNode("C", []);
+    var tree = new List<KNode>
+    {
+        call1,
+        new IfNode(new IntArg(1), [call2, call3]),
+        new ReturnNode()
+    };
+
+    Check("节点路径: 顶层", NodePaths.Find(tree, "0") is CallNode { Function: "A" });
+    Check("节点路径: 下钻 If.Then", NodePaths.Find(tree, "1.1") is CallNode { Function: "C" });
+    Check("节点路径: 带 # 前缀也认", NodePaths.Find(tree, "#1.0") is CallNode { Function: "B" });
+
+    var deleted = NodePaths.Delete(tree, "1.0");
+    Check("节点路径: 删除后 If 里只剩 1 个",
+        deleted[1] is IfNode { Then.Count: 1 } f && f.Then[0] is CallNode { Function: "C" });
+
+    var inserted = NodePaths.InsertBefore(tree, "1.1", new CallNode("X", []));
+    Check("节点路径: 插入到指定位置之前",
+        inserted[1] is IfNode { Then.Count: 3 } g && g.Then[1] is CallNode { Function: "X" });
+
+    var replaced = NodePaths.Replace(tree, "2", new ReturnNode(new IntArg(7)));
+    Check("节点路径: 替换节点", replaced[2] is ReturnNode { Value: IntArg { Value: 7 } });
+
+    var threw = false;
+    try
+    {
+        NodePaths.Find(tree, "9");
+    }
+    catch (InvalidOperationException)
+    {
+        threw = true;
+    }
+
+    Check("节点路径: 越界报错", threw);
+
+    // Else 分支的路径接着 Then 的下标走
+    var withElse = new List<KNode> { new IfNode(new IntArg(1), [call1], [call2, call3]) };
+    Check("节点路径: Else 接在 Then 之后", NodePaths.Find(withElse, "0.2") is CallNode { Function: "C" });
+}
+
 Console.WriteLine(failures == 0 ? "全部通过" : $"{failures} 项失败");
 return failures == 0 ? 0 : 1;
