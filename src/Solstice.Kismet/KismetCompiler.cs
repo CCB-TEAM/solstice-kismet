@@ -206,6 +206,9 @@ public static class KismetCompiler
                 case VectorArg v:
                     return new EX_VectorConst { Value = v.Value };
 
+                case RotationArg r:
+                    return new EX_RotationConst { Value = r.Value };
+
                 case ArrayConstArg ac:
                     return new EX_ArrayConst
                     {

@@ -100,6 +100,9 @@ public sealed record SkipOffsetArg(uint Value) : KArg(PinType.Int);
 /// <summary>向量字面量，对应 EX_VectorConst。</summary>
 public sealed record VectorArg(FVector Value) : KArg(PinType.Struct);
 
+/// <summary>旋转字面量，对应 EX_RotationConst。</summary>
+public sealed record RotationArg(FRotator Value) : KArg(PinType.Struct);
+
 /// <summary>数组字面量，对应 EX_ArrayConst。</summary>
 public sealed record ArrayConstArg(KismetPropertyPointer Inner, IReadOnlyList<KArg> Elements)
     : KArg(PinType.Struct);
