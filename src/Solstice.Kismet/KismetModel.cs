@@ -171,9 +171,33 @@ public sealed record LocalFinalCallNode(string Function, IReadOnlyList<KArg> Arg
 public sealed record MathCallNode(string Function, IReadOnlyList<KArg> Args)
     : KNode($"Math {Function}");
 
-/// <summary>布尔赋值：编译成 EX_LetBool（VariableExpression + AssignmentExpression）。</summary>
-public sealed record AssignBoolNode(string VariableName, KArg Value, PointerArg? TargetPointer = null)
+/// <summary>EX_LetBase 家族的赋值种类（都是 VariableExpression + AssignmentExpression 同形）。</summary>
+public enum AssignKind
+{
+    /// <summary>EX_LetBool</summary>
+    LetBool,
+
+    /// <summary>EX_LetObj</summary>
+    LetObj,
+
+    /// <summary>EX_LetWeakObjPtr</summary>
+    LetWeakObjPtr,
+
+    /// <summary>EX_LetDelegate</summary>
+    LetDelegate
+}
+
+/// <summary>EX_LetBase 家族赋值（VariableExpression + AssignmentExpression）。</summary>
+public sealed record AssignBoolNode(
+    string VariableName,
+    KArg Value,
+    PointerArg? TargetPointer = null,
+    AssignKind Kind = AssignKind.LetBool)
     : KNode($"Set {VariableName}");
+
+/// <summary>写持久帧上的变量，编译成 EX_LetValueOnPersistentFrame。</summary>
+public sealed record PersistentAssignNode(KismetPropertyPointer Destination, KArg Value, string Name = "")
+    : KNode($"SetPersistent {Name}");
 
 /// <summary>
 /// 循环：条件为真时反复执行循环体。

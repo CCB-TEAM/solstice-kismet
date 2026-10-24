@@ -59,7 +59,30 @@ public static class KismetDecompiler
                     continue;
 
                 case EX_LetBool letBool:
-                    nodes.Add(ToBoolAssign(letBool, options));
+                    nodes.Add(ToLetBase(letBool.VariableExpression, letBool.AssignmentExpression, AssignKind.LetBool, options));
+                    i++;
+                    continue;
+
+                case EX_LetObj letObj:
+                    nodes.Add(ToLetBase(letObj.VariableExpression, letObj.AssignmentExpression, AssignKind.LetObj, options));
+                    i++;
+                    continue;
+
+                case EX_LetWeakObjPtr letWeak:
+                    nodes.Add(ToLetBase(letWeak.VariableExpression, letWeak.AssignmentExpression, AssignKind.LetWeakObjPtr, options));
+                    i++;
+                    continue;
+
+                case EX_LetDelegate letDel:
+                    nodes.Add(ToLetBase(letDel.VariableExpression, letDel.AssignmentExpression, AssignKind.LetDelegate, options));
+                    i++;
+                    continue;
+
+                case EX_LetValueOnPersistentFrame persistent:
+                    nodes.Add(new PersistentAssignNode(
+                        persistent.DestinationProperty!,
+                        ToArg(persistent.AssignmentExpression, options) ?? new IntArg(0),
+                        PropName(persistent.DestinationProperty)));
                     i++;
                     continue;
 
@@ -307,12 +330,23 @@ public static class KismetDecompiler
         return args;
     }
 
-    private static KNode ToBoolAssign(EX_LetBool letBool, DecompileOptions options)
+    private static KNode ToLetBase(
+        KismetExpression? variable,
+        KismetExpression? assignment,
+        AssignKind kind,
+        DecompileOptions options)
     {
-        var target = TargetName(letBool.VariableExpression);
+        var target = TargetName(variable);
         // 赋值源可能是字面量，也可能是一次读变量/调用，必须原样保留
-        var value = ToArg(letBool.AssignmentExpression, options) ?? new BoolArg(false);
-        return new AssignBoolNode(target, value, PointerOf(letBool.VariableExpression));
+        var value = ToArg(assignment, options) ?? new BoolArg(false);
+        return new AssignBoolNode(target, value, PointerOf(variable), kind);
+    }
+
+    /// <summary>属性指针的名字（FFieldPath 最后一段）。</summary>
+    private static string PropName(KismetPropertyPointer? pointer)
+    {
+        var path = pointer?.New?.Path;
+        return path is { Length: > 0 } ? path[^1].ToString() : "?";
     }
 
     /// <summary>把变量表达式还原成指针参数，供回编译原样使用。</summary>

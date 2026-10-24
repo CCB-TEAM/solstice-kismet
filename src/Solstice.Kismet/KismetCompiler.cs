@@ -371,14 +371,29 @@ public static class KismetCompiler
                         ?? (variables is not null && variables.TryGetValue(ab.VariableName, out var bp) ? bp : null);
                     if (pointer is null) { throw new InvalidOperationException($"布尔赋值目标 {ab.VariableName} 没有可用的属性指针"); }
 
-                    // EX_LetBool：变量用表达式表示（不像 EX_Let 还要单独的 Value 指针）
-                    result.Add(new EX_LetBool
+                    // EX_LetBase 家族：变量用表达式表示（不像 EX_Let 还要单独的 Value 指针）
+                    KismetExpression varExpr = TargetExpr(ab.TargetPointer, pointer);
+                    KismetExpression value = ToExpr(ab.Value);
+
+                    KismetExpression assign = ab.Kind switch
                     {
-                        VariableExpression = TargetExpr(ab.TargetPointer, pointer),
-                        AssignmentExpression = ToExpr(ab.Value)
-                    });
+                        AssignKind.LetObj => new EX_LetObj { VariableExpression = varExpr, AssignmentExpression = value },
+                        AssignKind.LetWeakObjPtr => new EX_LetWeakObjPtr { VariableExpression = varExpr, AssignmentExpression = value },
+                        AssignKind.LetDelegate => new EX_LetDelegate { VariableExpression = varExpr, AssignmentExpression = value },
+                        _ => new EX_LetBool { VariableExpression = varExpr, AssignmentExpression = value }
+                    };
+
+                    result.Add(assign);
                     break;
                 }
+
+                case PersistentAssignNode pa:
+                    result.Add(new EX_LetValueOnPersistentFrame
+                    {
+                        DestinationProperty = pa.Destination,
+                        AssignmentExpression = ToExpr(pa.Value)
+                    });
+                    break;
 
                 case ReturnNode:
                     result.Add(new EX_Return { ReturnExpression = new EX_Nothing() });
