@@ -20,7 +20,11 @@ public sealed record FunctionParam(
     int Size = 0,
     FunctionParam? Inner = null,
     FunctionParam? Key = null,
-    FunctionParam? Value = null);
+    FunctionParam? Value = null,
+    // PATCH(cskismet): jmap 的 CPF_ReferenceParm / CPF_ConstParm 转录。
+    // 老产物（2026-11 之前的 extractor）没有这两个字段，读出来是 false。
+    bool Ref = false,
+    bool Const = false);
 
 /// <summary>函数签名。</summary>
 public sealed record FunctionSignature(
@@ -33,13 +37,31 @@ public sealed record FunctionSignature(
 
     public bool IsStatic => Flags.Contains("FUNC_Static", StringComparison.Ordinal);
 
-    /// <summary>需要传进去的参数（dir = in）。</summary>
+    /// <summary>
+    /// 需要写进字节码的实参（**除返回值之外的全部参数**）。
+    ///
+    /// <para>
+    /// PATCH(cskismet): 原来这里筛 <c>dir == "in"</c>，会把**按引用传入的入参**漏掉——
+    /// jmap 里它们的 <c>dir</c> 是 <c>out</c>（`CPF_OutParm` 也会被 `UPARAM(ref)` 置上）。
+    /// 实测 <c>Array_Length(TargetArray, ReturnValue)</c> 会得到 0 个输入参数，
+    /// 而 VM 侧 <c>ProcessScriptFunction</c> 对每个非返回值参数都要消费一个表达式。
+    /// </para>
+    /// </summary>
     public IReadOnlyList<FunctionParam> Inputs
-        => Params.Where(p => string.Equals(p.Dir, "in", StringComparison.OrdinalIgnoreCase)).ToArray();
+        => Params.Where(p => !string.Equals(p.Dir, "return", StringComparison.OrdinalIgnoreCase)).ToArray();
 
-    /// <summary>产出的值（dir = return / out）。</summary>
+    /// <summary>
+    /// 真正产出值的参数：返回值，以及 <c>out</c> 且**不是**按引用的那些。
+    ///
+    /// <para>
+    /// <c>dir=out &amp;&amp; Ref</c> 是按引用传递（可能是只读入参），不是输出；
+    /// <c>dir=out &amp;&amp; !Ref</c> 才是调用方要写回的真输出。
+    /// </para>
+    /// </summary>
     public IReadOnlyList<FunctionParam> Outputs
-        => Params.Where(p => p.Dir is "return" or "out").ToArray();
+        => Params.Where(p => string.Equals(p.Dir, "return", StringComparison.OrdinalIgnoreCase)
+                             || (string.Equals(p.Dir, "out", StringComparison.OrdinalIgnoreCase) && !p.Ref))
+            .ToArray();
 
     /// <summary>
     /// 返回值参数（<c>dir = "return"</c>）。
@@ -133,7 +155,10 @@ public sealed class FunctionCatalog
         Int(p, "size"),
         Nested(p, "inner"),
         Nested(p, "key"),
-        Nested(p, "value"));
+        Nested(p, "value"),
+        // PATCH(cskismet): 老产物没有这两个字段，TryGetProperty 失败即为 false
+        Bool(p, "ref"),
+        Bool(p, "const"));
 
     private static FunctionParam? Nested(JsonElement p, string name)
         => p.TryGetProperty(name, out var nested) && nested.ValueKind == JsonValueKind.Object
@@ -145,6 +170,10 @@ public sealed class FunctionCatalog
 
     private static int Int(JsonElement e, string prop)
         => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+
+    // PATCH(cskismet)
+    private static bool Bool(JsonElement e, string prop)
+        => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.True;
 
     /// <summary>优先按完整路径找，找不到再退回短名（同名函数可能有多份，取第一个）。</summary>
     public FunctionSignature? Find(string? ownerPath, string name)
