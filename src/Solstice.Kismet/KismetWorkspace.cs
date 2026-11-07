@@ -1808,7 +1808,32 @@ public sealed class KismetWorkspace
     {
         var fn = FindFunction(functionName)
                  ?? throw new InvalidOperationException($"找不到函数: {functionName}");
-        var variables = ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!);
+
+        // PATCH(cskismet): 新声明的局部变量只进 LoadedProperties、还没出现在字节码里，
+        // 只按字节码建的索引看不到它们，编译 LocalArg 时会报「参数类型 LocalArg 无法编译成表达式」。
+        var variables = new Dictionary<string, KismetPropertyPointer>(
+            ExpressionWalker.BuildVariableIndex(fn.ScriptBytecode!), StringComparer.Ordinal);
+
+        if (fn.LoadedProperties is { Length: > 0 })
+        {
+            foreach (var property in fn.LoadedProperties)
+            {
+                var name = property.Name.ToString();
+                if (variables.ContainsKey(name))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    variables[name] = EnsureVariable(functionName, name, instance: false).Pointer;
+                }
+                catch (Exception)
+                {
+                    // 构造不出来就让编译期照旧报错，不要在这里吞掉
+                }
+            }
+        }
 
         // 调用目标若还没出现在 Import 表里，先补一条（克隆现有函数导入的结构）
         foreach (var (name, owner) in CollectCallTargets(nodes))
