@@ -42,12 +42,21 @@ JmapExtractor <game.jmap> <outDir> [AssetRegistry.bin]
 
 | 文件 | 内容 | 不给 `AssetRegistry.bin` 时 |
 |---|---|---|
-| `objects.json` | 对象表：`/Script` 来自 jmap、`/Game` 来自 registry | 只有 `/Script` |
-| `functions.json` | 函数签名：**始终只有 `/Script`** | 同样只有 `/Script` |
+| `objects.json` | 对象表：`/Script` 来自 jmap；`/Game`、`/Engine`、插件来自 registry | 只有 `/Script` |
+| `functions.json` | 函数签名：**始终只有 `/Script`**（全量，含引擎类） | 同样只有 `/Script` |
+| `functions.kards.json` | 同上，但**只含游戏自己的模块**（`/Script/kards`、`/Script/KardsCore` 等） | — |
 
-**`functions.json` 里没有 `/Game` 函数**——registry 只给"有哪些资产"，不给函数签名。
-后果：调 native/script 函数可以靠 jmap；调**本资产**的蓝图函数走"导出"分支（不需要 jmap）；
-调**别的资产**的蓝图函数，两个来源都没有签名，解析会失败。
+**`functions.json` 里没有 `/Game` 条目**——registry 只给"有哪些资产"，不给函数签名。
+但**这不等于"蓝图函数没有签名"**：实测 KARDS 把蓝图函数以
+`FUNC_Event | FUNC_BlueprintEvent` 声明在 `/Script` 的原生 stub 类上
+（如 `/Script/kards.CardFunctionsStub`），jmap 因此有它们的完整签名，连 `dir` 都有。
+
+签名查找顺序（**按这个顺序找，不要一上来就判"没签名"**）：
+
+1. `/Script` 上的同名声明 —— 原生函数，或蓝图函数的 stub 声明 → **有签名**
+2. 本资产导出里的函数 → 走"导出"分支，不需要 jmap
+3. 以上都没有 → **真的没有签名**（实测：`ApplyDamageToCard` 在 4.7 万条对象里 0 命中），
+   只能用 `args` 显式给出全部参数
 
 下面用变量代表它们，按你的环境替换：
 
@@ -236,7 +245,7 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `没有 X 的签名` | catalog 未载入，或用了只含游戏侧的 jmap 查引擎函数 | 载入含引擎类的 `functions.json` |
-| `没有 X 的签名（jmap 只覆盖 /Script）` | 被调的是**本资产的蓝图函数**，jmap 里没有它的签名 | 用 `args` 显式给出全部参数 |
+| `没有 X 的签名（jmap 只覆盖 /Script）` | 被调函数既不在 `/Script` 声明、也不在本资产导出里 | 先按 `/Script` 的 stub 声明找一遍；确实没有再用 `args` 显式给出全部参数 |
 | `参数 X 的类型是 Y，给的是 Z` | 参数值类型与签名不符 | 换成匹配的 `kind`，或改调用别的函数 |
 | `X 没有名为 Y 的输入参数` | 参数名写错 | 消息里会列出可选参数名 |
 | `路径 0 指向的是 X，不是调用节点` | `replace_call` 指到了非调用节点 | 先 `decompile` 看清路径指向什么 |
@@ -255,7 +264,19 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
   `LocalFinal ExecuteUbergraph_X(<EX_IntConst 入口偏移>)`。所以往段尾追加调用是安全的，
   动段内布局会让这些常量整体错位（`ComputedJump` 跳进指令中间）。
   `KismetWorkspace` 会校验并在错位时回滚/拒绝写盘，但**不要绕过它直接改字节码**
-- `StructProperty` 的类型在 jmap 里 `class = null`：只知道"是结构体 + 字节大小"，不知道具体结构
+- **`StructProperty` 的 `class` 是有值的**（实测 5759 个参数，`class=null` 为 0），形如
+  `{"type":"StructProperty","class":"/Script/Engine.LatentActionInfo","offset":8,"size":24}`。
+  但**结构成员不在 jmap 里**，要查 usmap
+- **jmap 的 `dir` 不等于"输入/输出"**：`dir=out` 同时覆盖真 out 参数与按引用传入的入参。
+  实测 `Array_Add(TargetArray out, NewItem out, ReturnValue return)`，而调用点只读 `ReturnValue`。
+  原因是 jmap 把 `CPF_OutParm` 与 `CPF_ReferenceParm` 折叠，且**不暴露 `CPF_ConstParm`/`CPF_ReferenceParm`**。
+  所以"这个参数是不是输出"**无法只靠 jmap 判定**
+- **`objects.json` 的 `super` 恒为 null**（实测 47311 条全 null）：**继承链不在 jmap 里**，
+  必须走 usmap。任何"沿 super 找函数/属性"的逻辑都会静默走空
+- **`objects.json` 没有 Property 条目**（类型只有 Package/Enum/Class/Function/Object/ScriptStruct/Asset）：
+  类属性与结构成员都不在 jmap 里，只能从 usmap 或资产自身的 `LoadedProperties` 拿
+- **`functions.json` 的 key 格式不统一**：常规函数用短名，`__DelegateSignature` 用全路径
+  （实测 12617 短名 + 447 全路径）。按短名索引会静默漏掉全部 delegate
 - **临时变量按 jmap 的类型描述递归构造**：基础类型用 UAssetAPI 的 Property 子类 + 实测 `ElementSize`，
   结构体用 jmap 的 `struct` 路径补 `ScriptStruct`/`UserDefinedStruct` 导入，容器用 `inner`/`key`/`value`
   递归建内层，对象/枚举补类/枚举导入。老 catalog（2026-10-24 之前产的）缺这些字段时，
@@ -263,7 +284,9 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 - **参数值只覆盖标量 + 变量 + 嵌套调用**：text / struct / array / map / set 仍需占位
 - **节点路径按当前反编译结果编号，不跨编辑稳定**：批量改动要先读完再改
 - **蓝图资产定义的结构（`S_*`）不在 usmap** 里，成员查不到
-- `EX_CallMath` 形态未推断：纯函数也可能被编成 `FinalFunction`
+- `EX_CallMath` 形态未推断：纯函数也可能被编成 `FinalFunction`。
+  注意 `EX_CallMath` 的语义是**静态纯函数**（`BlueprintPure`），不是"数学库"——
+  实测 `PrintString` 也被编成 `EX_CallMath`
 - 只在 UE 5.6 上实测；更老版本有 `EX_Let` 少一个指针、`KismetPropertyPointer` 用 `Old` 形态等差异
 
 ## 8. 最小可运行示例
