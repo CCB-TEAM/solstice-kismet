@@ -267,16 +267,19 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 - **`StructProperty` 的 `class` 是有值的**（实测 5759 个参数，`class=null` 为 0），形如
   `{"type":"StructProperty","class":"/Script/Engine.LatentActionInfo","offset":8,"size":24}`。
   但**结构成员不在 jmap 里**，要查 usmap
-- **jmap 的 `dir` 不等于"输入/输出"**：`dir=out` 同时覆盖真 out 参数与按引用传入的入参。
+- **jmap 的 `dir` 不等于"输入/输出"**：`dir` 只由两个标志推出（`CPF_ReturnParm` → `return`，
+  `CPF_OutParm` → `out`，其余 → `in`），**`CPF_ReferenceParm` / `CPF_ConstParm` 根本没被读**；
+  而 `CPF_OutParm` 也会被 `UPARAM(ref)` 的按引用入参置上。
   实测 `Array_Add(TargetArray out, NewItem out, ReturnValue return)`，而调用点只读 `ReturnValue`。
-  原因是 jmap 把 `CPF_OutParm` 与 `CPF_ReferenceParm` 折叠，且**不暴露 `CPF_ConstParm`/`CPF_ReferenceParm`**。
   所以"这个参数是不是输出"**无法只靠 jmap 判定**
 - **`objects.json` 的 `super` 恒为 null**（实测 47311 条全 null）：**继承链不在 jmap 里**，
   必须走 usmap。任何"沿 super 找函数/属性"的逻辑都会静默走空
 - **`objects.json` 没有 Property 条目**（类型只有 Package/Enum/Class/Function/Object/ScriptStruct/Asset）：
   类属性与结构成员都不在 jmap 里，只能从 usmap 或资产自身的 `LoadedProperties` 拿
-- **`functions.json` 的 key 格式不统一**：常规函数用短名，`__DelegateSignature` 用全路径
-  （实测 12617 短名 + 447 全路径）。按短名索引会静默漏掉全部 delegate
+- **`functions.json` 的函数 key 格式不统一**：短名取自对象路径最后一个 `:` 之后；
+  而 outer 是 **Package** 的对象路径用 `.` 分隔、没有 `:`，此时 key 退化成完整路径。
+  实测 12617 短名 + 447 全路径，**447 个全部是 `__DelegateSignature`**。
+  按短名索引会静默漏掉全部 delegate
 - **临时变量按 jmap 的类型描述递归构造**：基础类型用 UAssetAPI 的 Property 子类 + 实测 `ElementSize`，
   结构体用 jmap 的 `struct` 路径补 `ScriptStruct`/`UserDefinedStruct` 导入，容器用 `inner`/`key`/`value`
   递归建内层，对象/枚举补类/枚举导入。老 catalog（2026-10-24 之前产的）缺这些字段时，
