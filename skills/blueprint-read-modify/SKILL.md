@@ -267,11 +267,14 @@ MCP 下是 `kismet_save`。**不调用就不落盘**（刻意设计，避免 age
 - **`StructProperty` 的 `class` 是有值的**（实测 5759 个参数，`class=null` 为 0），形如
   `{"type":"StructProperty","class":"/Script/Engine.LatentActionInfo","offset":8,"size":24}`。
   但**结构成员不在 jmap 里**，要查 usmap
-- **jmap 的 `dir` 不等于"输入/输出"**：`dir` 只由两个标志推出（`CPF_ReturnParm` → `return`，
-  `CPF_OutParm` → `out`，其余 → `in`），**`CPF_ReferenceParm` / `CPF_ConstParm` 根本没被读**；
-  而 `CPF_OutParm` 也会被 `UPARAM(ref)` 的按引用入参置上。
-  实测 `Array_Add(TargetArray out, NewItem out, ReturnValue return)`，而调用点只读 `ReturnValue`。
-  所以"这个参数是不是输出"**无法只靠 jmap 判定**
+- **判定参数方向要同时看 `dir` + `ref` + `const`**：`dir` 只是 `CPF_OutParm` 的折叠视图，
+  而 `CPF_OutParm` 也会被 `UPARAM(ref)` 的按引用入参置上。`params` 里的 `ref` / `const`
+  （`CPF_ReferenceParm` / `CPF_ConstParm` 的转录）才是判别式：
+  `out && !ref` → 真 out；`out && ref && !const` → 可读写引用；`out && ref && const` → 按引用只读入参。
+  实测 `Array_Add` 的 `TargetArray` / `NewItem` 都是 `out+ref+const`（入参），
+  而 `Array_Get` 的 `Item` 是 `out+!ref`（真输出）
+- **老 catalog 没有 `ref` / `const`**（2026-11 之前的 extractor）：那时只能靠 `dir`，
+  会把按引用入参误判成输出。遇到缺这两个字段的 catalog **先重新导出**，别硬猜
 - **`objects.json` 的 `super` 恒为 null**（实测 47311 条全 null）：**继承链不在 jmap 里**，
   必须走 usmap。任何"沿 super 找函数/属性"的逻辑都会静默走空
 - **`objects.json` 没有 Property 条目**（类型只有 Package/Enum/Class/Function/Object/ScriptStruct/Asset）：
